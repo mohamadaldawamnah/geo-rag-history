@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Interactive History MVP - OSM Metadata + Wikipedia</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link rel="stylesheet" href="leaflet.css">
+
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f4f4f4;
+  }
+
+  #map {
+    height: 60vh;
+  }
+
+  #panel {
+    height: 40vh;
+    overflow-y: auto;
+    padding: 15px;
+    background: white;
+    border-top: 2px solid #ccc;
+  }
+
+  button, input {
+    width: 100%;
+    padding: 10px;
+    margin-top: 10px;
+  }
+
+  pre {
+    background: #f0f0f0;
+    padding: 10px;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <h2>OSM Landmark Inspector (Metadata + History)</h2>
+  <div id="output">Click on the map, then a marker.</div>
+</div>
+
+<script src="leaflet.js"></script>
+
+<script>
+// ===============================
+// MAP SETUP
+// ===============================
+let map = L.map('map').setView([51.8985, -8.4756], 14);
+
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19
+}).addTo(map);
+
+let markers = [];
+let selected = null;
+
+// ===============================
+// CLEAR MARKERS
+// ===============================
+function clearMarkers() {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+}
+
+// ===============================
+// FETCH FROM OVERPASS
+// ===============================
+async function fetchOverpassLandmarks(lat, lon) {
+  const radius = 800;
+
+  const query = `
+[out:json];
+(
+  node["historic"](around:${radius},${lat},${lon});
+  way["historic"](around:${radius},${lat},${lon});
+  relation["historic"](around:${radius},${lat},${lon});
+
+  node["tourism"="attraction"](around:${radius},${lat},${lon});
+  way["tourism"="attraction"](around:${radius},${lat},${lon});
+  relation["tourism"="attraction"](around:${radius},${lat},${lon});
+ 
+  node["amenity"="place_of_worship"](around:${radius},${lat},${lon});
+  way["amenity"="place_of_worship"](around:${radius},${lat},${lon});
+  relation["amenity"="place_of_worship"](around:${radius},${lat},${lon});
+);
+out tags center;
+`
+// the last query is the one i added to show that some markers don't associate with certain markers that you might think they associate with
+;
+
+  const url =
+    "https://overpass-api.de/api/interpreter?data=" +
+    encodeURIComponent(query);
+
+  const resp = await fetch(url);
+  const data = await resp.json();
+  console.log("RAW OVERPASS DATA:", data.elements);
+  return data.elements || [];
+}
+
+// ===============================
+// BUILD LANDMARK DATASET
+// ===============================
+function buildLandmarkDataset(elements) {
+  const landmarks = [];
+
+  elements.forEach(el => {
+    const tags = el.tags || {};
+    const name = tags.name;
+    if (!name) return;
+
+    let lat = el.lat;
+    let lon = el.lon;
+    let coordSource = "lat/lon";
+
+    if ((!lat || !lon) && el.center) {
+      lat = el.center.lat;
+      lon = el.center.lon;
+      coordSource = "center";
+    }
+
+    if (!lat || !lon) return;
+
+    let retrievedText = null;
+
+    if (name === "Crawford Observatory") {
+      retrievedText = `The Crawford Observatory is a 19th-century observatory located on the campus of University College Cork, Ireland. Built in 1878, it housed some of the most advanced astronomical instruments of its time.
+
+The observatory fell into disuse due to increasing light pollution but was restored and reopened in 2006.`;
+    }
+
+    if (
+      name === "Church of Saint Anne" ||
+      name === "Church of St Anne" ||
+      name === "Church of St Anne, Shandon"
+    ) {
+      retrievedText = `The Church of St Anne is a Church of Ireland church built between 1722 and 1726 in the Shandon district of Cork.
+
+Its tower and bells are among the most recognisable landmarks in the city.`;
+    }
+
+    if (name === "Elizabeth Fort") {
+      retrievedText = `Elizabeth Fort is a 17th-century star fort in Cork that served as a defensive structure, barracks, and later a prison.
+
+It is now preserved as a heritage site open to the public.`;
+    }
+
+    if (!retrievedText) return;
+
+    const summary = retrievedText.split(".")[0] + ".";
+
+    const timeline = {
+      "1200": "This site did not yet exist in its current historical form.",
+      "1600": retrievedText.split("\n")[0],
+      "1900": retrievedText.split("\n")[retrievedText.split("\n").length - 1]
+    };
+
+    landmarks.push({
+      name,
+      lat,
+      lon,
+      coordSource,
+      osmType: el.type,   // node | way | relation
+      osmId: el.id,
+      tags,
+      retrievedText,
+      summary,
+      timeline
+    });
+  });
+
+  return landmarks;
+}
+
+// raw data about collected data desplayed 
+
+
+function showRaw(site) {
+  selected = site;
+  document.getElementById("output").innerHTML = `
+    <h3>${site.name}</h3>
+
+    <h4>OSM Metadata</h4>
+    <p><b>Element type:</b> ${site.osmType}</p>
+    <p><b>OSM ID:</b> ${site.osmId}</p>
+    <p><b>Coordinate source:</b> ${site.coordSource}</p>
+
+    <p><b>All tags:</b></p>
+    <pre>${JSON.stringify(site.tags, null, 2)}</pre>
+
+    <h4>Retrieved historical text (Wikipedia)</h4>
+    <pre>${site.retrievedText}</pre>
+
+    <button onclick="showSummary()">Show Summary</button>
+
+    <input id="yearInput" type="number" placeholder="Ask about a year (e.g. 1600)">
+    <button onclick="answerYear()">Ask</button>
+  `;
+}
+
+// summeray 
+
+function showSummary() {
+  document.getElementById("output").innerHTML = `
+    <h3>${selected.name}</h3>
+    <p><b>Summary (from retrieved text):</b></p>
+    <p>${selected.summary}</p>
+
+    <button onclick="showRaw(selected)">Back to Metadata View</button>
+
+    <input id="yearInput" type="number" placeholder="Ask about a year (e.g. 1600)">
+    <button onclick="answerYear()">Ask</button>
+  `;
+}
+//  year queery
+function answerYear() {
+  const year = document.getElementById("yearInput").value.trim();
+  if (!year) return alert("Enter a year");
+
+  let bestYear = null;
+  let smallestDiff = Infinity;
+
+  for (const key in selected.timeline) {
+    const diff = Math.abs(parseInt(key) - parseInt(year));
+    if (diff < smallestDiff) {
+      smallestDiff = diff;
+      bestYear = key;
+    }
+  }
+
+  document.getElementById("output").innerHTML = `
+    <h3>${selected.name}</h3>
+    <p><b>Year asked:</b> ${year}</p>
+    <p><b>Closest period:</b> ${bestYear}</p>
+    <p>${selected.timeline[bestYear]}</p>
+
+    <button onclick="showRaw(selected)">Back to Metadata View</button>
+  `;
+}
+
+
+// map click 
+map.on("click", async e => {
+  clearMarkers();
+
+  const elements = await fetchOverpassLandmarks(
+    e.latlng.lat,
+    e.latlng.lng
+  );
+
+  const landmarks = buildLandmarkDataset(elements);
+
+  if (landmarks.length === 0) {
+    document.getElementById("output").innerHTML =
+      "No landmarks with historical data found.";
+    return;
+  }
+
+  landmarks.forEach(site => {
+    const m = L.marker([site.lat, site.lon]).addTo(map);
+    m.on("click", () => showRaw(site));
+    markers.push(m);
+  });
+
+  document.getElementById("output").innerHTML =
+    `Found ${landmarks.length} landmarks. Click a marker.`;
+});
+</script>
+
+</body>
+</html>
