@@ -3,19 +3,11 @@ Database module for the Interactive History Platform.
 Handles all database operations for storing landmarks, historical texts, AI-generated answers, and evaluation metrics.
 """
 
-# Import the sqlite3 library for working with SQLite databases
 import sqlite3
-
-# Import json for converting Python objects to/from JSON format
 import json
-
-# Import datetime for timestamps
 from datetime import datetime
-
-# Import Path for working with file paths in a cross-platform way
 from pathlib import Path
 
-# Set the database file path to be in the same directory as this script
 DB_PATH = Path(__file__).parent / 'cache.db'
 
 
@@ -24,25 +16,21 @@ class Database:
 
     def __init__(self, path=None):
         """Initialize the database with an optional custom path."""
-        # Use the provided path or the default DB_PATH
         self.path = path or str(DB_PATH)
-        # Create the database tables if they don't exist yet
-        self.init_db()
+        self.initialize_database_tables()
 
-    def get_conn(self):
+    def get_database_connection(self):
         """Create and return a new database connection."""
-        # Connect to the SQLite database file
-        conn = sqlite3.connect(self.path)
-        # Set row_factory to return rows as dictionary-like objects instead of tuples
-        conn.row_factory = sqlite3.Row
-        return conn
+        database_connection = sqlite3.connect(self.path)
+        database_connection.row_factory = sqlite3.Row
+        return database_connection
 
-    def init_db(self):
+    def initialize_database_tables(self):
         """Create all required database tables if they don't already exist."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
 
-        c.execute('''
+        database_cursor.execute('''
             CREATE TABLE IF NOT EXISTS landmarks (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -58,7 +46,7 @@ class Database:
             )
         ''')
 
-        c.execute('''
+        database_cursor.execute('''
             CREATE TABLE IF NOT EXISTS historical_texts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 landmark_id TEXT NOT NULL,
@@ -72,7 +60,7 @@ class Database:
             )
         ''')
 
-        c.execute('''
+        database_cursor.execute('''
             CREATE TABLE IF NOT EXISTS generated_answers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 landmark_id TEXT NOT NULL,
@@ -88,7 +76,7 @@ class Database:
             )
         ''')
 
-        c.execute('''
+        database_cursor.execute('''
             CREATE TABLE IF NOT EXISTS evaluation_metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 test_name TEXT NOT NULL,
@@ -99,7 +87,7 @@ class Database:
             )
         ''')
 
-        c.execute('''
+        database_cursor.execute('''
             CREATE TABLE IF NOT EXISTS statistics (
                 key TEXT PRIMARY KEY,
                 value TEXT,
@@ -107,213 +95,200 @@ class Database:
             )
         ''')
 
-        conn.commit()
-        conn.close()
+        database_connection.commit()
+        database_connection.close()
 
-    def save_landmark(self, lm):
+    def save_landmark_to_database(self, landmark_data):
         """Save or update a landmark in the database."""
-        # Get a database connection
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            # Insert or replace the landmark record
-            c.execute('''
+            database_cursor.execute('''
                 INSERT OR REPLACE INTO landmarks
                 (id, name, lat, lon, osm_type, osm_id, tags, wikidata_id, wikipedia_url, retrieved_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                lm['id'],                          # Unique landmark identifier
-                lm['name'],                        # Landmark name
-                lm['lat'],                         # Latitude coordinate
-                lm['lon'],                         # Longitude coordinate
-                lm.get('osmType'),                 # OSM type (node/way/relation)
-                lm.get('osmId'),                   # OSM ID number
-                json.dumps(lm.get('tags', {})),    # Tags as JSON string
-                lm.get('wikidata'),                # Wikidata ID if available
-                lm.get('wikipedia'),               # Wikipedia URL if available
-                datetime.utcnow().isoformat(),     # Current timestamp
+                landmark_data['id'],
+                landmark_data['name'],
+                landmark_data['lat'],
+                landmark_data['lon'],
+                landmark_data.get('osmType'),
+                landmark_data.get('osmId'),
+                json.dumps(landmark_data.get('tags', {})),
+                landmark_data.get('wikidata'),
+                landmark_data.get('wikipedia'),
+                datetime.utcnow().isoformat(),
             ))
-            conn.commit()
+            database_connection.commit()
             return True
-        except Exception as e:
-            print(f"save landmark error: {e}")
+        except Exception as error:
+            print(f"Error saving landmark to database: {error}")
             return False
         finally:
-            conn.close()
+            database_connection.close()
 
-    def get_landmark(self, lm_id):
+    def retrieve_landmark_by_id(self, landmark_id):
         """Retrieve a landmark by its ID."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            # Query for the landmark with the matching ID
-            c.execute('SELECT * FROM landmarks WHERE id = ?', (lm_id,))
-            row = c.fetchone()
-            # Convert the database row to a dictionary if found, otherwise return None
-            return dict(row) if row else None
+            database_cursor.execute('SELECT * FROM landmarks WHERE id = ?', (landmark_id,))
+            retrieved_row = database_cursor.fetchone()
+            return dict(retrieved_row) if retrieved_row else None
         finally:
-            conn.close()
+            database_connection.close()
 
-    def get_landmarks_by_location(self, lat, lon, radius_km=1):
+    def retrieve_landmarks_by_geographic_area(self, latitude, longitude, radius_in_kilometers=1):
         """Retrieve all landmarks within a certain radius of a location."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            # Query for landmarks where the latitude and longitude are within the radius
-            # (Using simple rectangular search; 1 degree latitude/longitude ≈ 111 km)
-            c.execute('''
+            database_cursor.execute('''
                 SELECT * FROM landmarks
                 WHERE ABS(lat - ?) < ? AND ABS(lon - ?) < ?
-            ''', (lat, radius_km / 111, lon, radius_km / 111))
+            ''', (latitude, radius_in_kilometers / 111, longitude, radius_in_kilometers / 111))
             
-            # Convert all rows to dictionaries and return as a list
-            results = []
-            for row in c.fetchall():
-                results.append(dict(row))
-            return results
+            landmarks_list = []
+            for retrieved_row in database_cursor.fetchall():
+                landmarks_list.append(dict(retrieved_row))
+            return landmarks_list
         finally:
-            conn.close()
+            database_connection.close()
 
-    def save_historical_text(self, lm_id, text=None, source=None, url=None, status='success', error=None):
+    def save_historical_text_for_landmark(self, landmark_id, text_content=None, source_provider=None, source_url=None, retrieval_status='success', error_message=None):
         """Save historical text retrieved for a landmark."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            # Insert a new row into the historical_texts table
-            c.execute('''
+            database_cursor.execute('''
                 INSERT INTO historical_texts
                 (landmark_id, text, source, source_url, retrieval_status, error_message)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (
-                lm_id,     # Which landmark this text is about
-                text,      # The actual text content
-                source,    # Where it came from (Wikipedia, Wikidata, etc.)
-                url,       # URL to the source
-                status,    # Success or error status
-                error,     # Error message if status is error
+                landmark_id,
+                text_content,
+                source_provider,
+                source_url,
+                retrieval_status,
+                error_message,
             ))
-            conn.commit()
+            database_connection.commit()
             return True
-        except Exception as e:
-            print(f"save text error: {e}")
+        except Exception as error:
+            print(f"Error saving historical text: {error}")
             return False
         finally:
-            conn.close()
+            database_connection.close()
 
-    def get_latest_text(self, lm_id):
+    def get_latest_historical_text_for_landmark(self, landmark_id):
         """Get the most recently retrieved historical text for a landmark."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            # Query the historical text for this landmark, ordered by most recent first
-            c.execute('''
+            database_cursor.execute('''
                 SELECT * FROM historical_texts
                 WHERE landmark_id = ?
                 ORDER BY retrieved_at DESC LIMIT 1
-            ''', (lm_id,))
-            row = c.fetchone()
-            # Convert the database row to a dictionary if found
-            return dict(row) if row else None
+            ''', (landmark_id,))
+            retrieved_row = database_cursor.fetchone()
+            return dict(retrieved_row) if retrieved_row else None
         finally:
-            conn.close()
+            database_connection.close()
 
-    def save_answer(self, lm_id, question, answer=None, year=None, status='success', error=None, model='ollama-llama2', temp=0.3):
+    def save_generated_answer_for_landmark(self, landmark_id, user_question, generated_answer=None, year_filter=None, generation_status='success', error_message=None, model_name='ollama-llama2', temperature_value=0.3):
         """Save an AI-generated answer about a landmark."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            c.execute('''
+            database_cursor.execute('''
                 INSERT INTO generated_answers
                 (landmark_id, question, year, answer, generation_status, error_message, model_used, temperature)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (lm_id, question, year, answer, status, error, model, temp))
-            conn.commit()
+            ''', (landmark_id, user_question, year_filter, generated_answer, generation_status, error_message, model_name, temperature_value))
+            database_connection.commit()
             return True
-        except Exception as e:
-            print(f"save answer error: {e}")
+        except Exception as error:
+            print(f"Error saving generated answer: {error}")
             return False
         finally:
-            conn.close()
+            database_connection.close()
 
-    def get_answer(self, lm_id, question, year=None):
+    def retrieve_answer_for_landmark(self, landmark_id, user_question, year_filter=None):
         """Retrieve the most recent answer for a specific question about a landmark."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            # Query for the answer matching landmark, question, and optional year
-            c.execute('''
+            database_cursor.execute('''
                 SELECT * FROM generated_answers
                 WHERE landmark_id = ? AND question = ? AND year IS ?
                 ORDER BY generated_at DESC LIMIT 1
-            ''', (lm_id, question, year))
-            row = c.fetchone()
-            # Convert the database row to a dictionary if found
-            return dict(row) if row else None
+            ''', (landmark_id, user_question, year_filter))
+            retrieved_row = database_cursor.fetchone()
+            return dict(retrieved_row) if retrieved_row else None
         finally:
-            conn.close()
+            database_connection.close()
 
-    def save_eval(self, test_name, res):
+    def save_evaluation_results(self, test_name, results_data):
         """Save evaluation test results to the database."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            for key, val in res.items():
-                c.execute('''
+            for metric_key, metric_value in results_data.items():
+                database_cursor.execute('''
                     INSERT INTO evaluation_metrics (test_name, metric_name, metric_value)
                     VALUES (?, ?, ?)
-                ''', (test_name, key, val))
-            conn.commit()
+                ''', (test_name, metric_key, metric_value))
+            database_connection.commit()
         finally:
-            conn.close()
+            database_connection.close()
 
-    def get_eval_results(self, test_name=None):
+    def retrieve_evaluation_results(self, test_name=None):
         """Retrieve evaluation test results, optionally filtered by test name."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
             if test_name:
-                c.execute('SELECT * FROM evaluation_metrics WHERE test_name = ?', (test_name,))
+                database_cursor.execute('SELECT * FROM evaluation_metrics WHERE test_name = ?', (test_name,))
             else:
-                c.execute('SELECT * FROM evaluation_metrics')
-            rows = c.fetchall()
-            return [dict(row) for row in rows] if rows else []
+                database_cursor.execute('SELECT * FROM evaluation_metrics')
+            retrieved_rows = database_cursor.fetchall()
+            return [dict(row) for row in retrieved_rows] if retrieved_rows else []
         finally:
-            conn.close()
+            database_connection.close()
 
-    def update_stat(self, key, value):
+    def update_statistic_value(self, statistic_key, statistic_value):
         """Save or update a statistic value."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            c.execute('''
+            database_cursor.execute('''
                 INSERT OR REPLACE INTO statistics (key, value)
                 VALUES (?, ?)
-            ''', (key, str(value)))
-            conn.commit()
+            ''', (statistic_key, str(statistic_value)))
+            database_connection.commit()
         finally:
-            conn.close()
+            database_connection.close()
 
-    def get_stat(self, key):
+    def retrieve_statistic_value(self, statistic_key):
         """Retrieve a statistic value by its key."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            c.execute('SELECT value FROM statistics WHERE key = ?', (key,))
-            row = c.fetchone()
-            return row['value'] if row else None
+            database_cursor.execute('SELECT value FROM statistics WHERE key = ?', (statistic_key,))
+            retrieved_row = database_cursor.fetchone()
+            return retrieved_row['value'] if retrieved_row else None
         finally:
-            conn.close()
+            database_connection.close()
 
-    def clear_all(self):
+    def clear_all_database_content(self):
         """Delete all data from the database tables (used for testing/reset)."""
-        conn = self.get_conn()
-        c = conn.cursor()
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
         try:
-            # Delete all rows from each table
-            c.execute('DELETE FROM evaluation_metrics')
-            c.execute('DELETE FROM generated_answers')
-            c.execute('DELETE FROM historical_texts')
-            c.execute('DELETE FROM landmarks')
-            conn.commit()
+            database_cursor.execute('DELETE FROM evaluation_metrics')
+            database_cursor.execute('DELETE FROM generated_answers')
+            database_cursor.execute('DELETE FROM historical_texts')
+            database_cursor.execute('DELETE FROM landmarks')
+            database_connection.commit()
         finally:
-            conn.close()
+            database_connection.close()

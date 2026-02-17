@@ -172,7 +172,7 @@
 	}
 
 
-/* zoom and fade animations */
+/* zoom and fade animations was copied from online resource */
 
 .leaflet-fade-anim .leaflet-popup {
 	opacity: 0;
@@ -209,7 +209,7 @@ svg.leaflet-zoom-animated {
 	}
 
 
-/* cursors */
+/* cursors	movement */
 
 .leaflet-interactive {
 	cursor: pointer;
@@ -236,7 +236,7 @@ svg.leaflet-zoom-animated {
 	cursor:         grabbing;
 	}
 
-/* marker & overlays interactivity */
+/* marker andoverlays interactivity */
 .leaflet-marker-icon,
 .leaflet-marker-shadow,
 .leaflet-image-layer,
@@ -249,11 +249,12 @@ svg.leaflet-zoom-animated {
 .leaflet-image-layer.leaflet-interactive,
 .leaflet-pane > svg path.leaflet-interactive,
 svg.leaflet-image-layer.leaflet-interactive path {
-	pointer-events: visiblePainted; /* IE 9-10 doesn't have auto */
+	pointer-events: visiblePainted; 
 	pointer-events: auto;
 	}
 
-/* visual tweaks */
+
+/* visual added */
 
 .leaflet-container {
 	background: #ddd;

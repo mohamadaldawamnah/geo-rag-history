@@ -52,9 +52,6 @@
 <script src="leaflet.js"></script>
 
 <script>
-// ===============================
-// MAP SETUP
-// ===============================
 let map = L.map('map').setView([51.8985, -8.4756], 14);
 
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -64,17 +61,11 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let markers = [];
 let selected = null;
 
-// ===============================
-// CLEAR MARKERS
-// ===============================
 function clearMarkers() {
   markers.forEach(m => map.removeLayer(m));
   markers = [];
 }
 
-// ===============================
-// FETCH FROM OVERPASS
-// ===============================
 async function fetchOverpassLandmarks(lat, lon) {
   const radius = 800;
 
@@ -94,11 +85,9 @@ async function fetchOverpassLandmarks(lat, lon) {
   relation["amenity"="place_of_worship"](around:${radius},${lat},${lon});
 );
 out tags center;
-`
-// the last query is the one i added to show that some markers don't associate with certain markers that you might think they associate with
-;
+`;
 
-  const url =
+const url =
     "https://overpass-api.de/api/interpreter?data=" +
     encodeURIComponent(query);
 
@@ -108,9 +97,6 @@ out tags center;
   return data.elements || [];
 }
 
-// ===============================
-// BUILD LANDMARK DATASET
-// ===============================
 function buildLandmarkDataset(elements) {
   const landmarks = [];
 
@@ -182,9 +168,6 @@ It is now preserved as a heritage site open to the public.`;
   return landmarks;
 }
 
-// raw data about collected data desplayed 
-
-
 function showRaw(site) {
   selected = site;
   document.getElementById("output").innerHTML = `
@@ -208,8 +191,6 @@ function showRaw(site) {
   `;
 }
 
-// summeray 
-
 function showSummary() {
   document.getElementById("output").innerHTML = `
     <h3>${selected.name}</h3>
@@ -222,7 +203,7 @@ function showSummary() {
     <button onclick="answerYear()">Ask</button>
   `;
 }
-//  year queery
+
 function answerYear() {
   const year = document.getElementById("yearInput").value.trim();
   if (!year) return alert("Enter a year");
@@ -249,7 +230,6 @@ function answerYear() {
 }
 
 
-// map click 
 map.on("click", async e => {
   clearMarkers();
 

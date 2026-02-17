@@ -3,254 +3,184 @@ Backend Flask API server for the Interactive History Platform.
 Handles text retrieval from Wikipedia/Wikidata and answer generation using a local LLM.
 """
 
-# Import Flask for building the web API
 from flask import Flask, request, jsonify
-
-# Import CORS middleware to allow requests from the frontend
 from flask_cors import CORS
-
-# Import requests library for making HTTP calls to external APIs
 import requests
-
-# Import json for working with JSON data
 import json
-
-# Import regex for text processing
 import re
-
-# Import the database module for storing and retrieving data
 from db import Database
 
-# Create a Flask application instance
 app = Flask(__name__)
-
-# Enable CORS to allow frontend to communicate with backend
 CORS(app)
-
-# Create a database connection instance for data operations
 db = Database()
 
-# Configuration for the Ollama API (local LLM service)
-OLLAMA_API = 'http://localhost:11434/api/generate'  # Ollama API endpoint
-OLLAMA_MODEL = 'llama2'                              # Model to use for generation
-
-# Configuration for Wikipedia API
+OLLAMA_API = 'http://localhost:11434/api/generate'
+OLLAMA_MODEL = 'llama2'
 WIKI_API = 'https://en.wikipedia.org/w/api.php'
-
-# Configuration for Wikidata API
 WIKIDATA_API = 'https://www.wikidata.org/w/api.php'
 
 
-def get_wiki_text(title, max_len=2000):
+def fetch_wikipedia_text(article_title, max_text_length=2000):
     """Fetch historical text from Wikipedia for a given article title."""
     try:
-        # Build the parameters for the Wikipedia API query
-        params = {
-            'action': 'query',         # We want to query articles
-            'format': 'json',          # Return results as JSON
-            'titles': title,           # The article title to search for
-            'prop': 'extracts|pageimages',  # Get text extract and images
-            'exintro': 1,              # Get intro section only (shorter)
-            'redirects': 1,            # Follow redirects
+        query_parameters = {
+            'action': 'query',
+            'format': 'json',
+            'titles': article_title,
+            'prop': 'extracts|pageimages',
+            'exintro': 1,
+            'redirects': 1,
         }
         
-        # Make the HTTP request to Wikipedia
-        res = requests.get(WIKI_API, params=params, timeout=10)
-        res.raise_for_status()
+        response = requests.get(WIKI_API, params=query_parameters, timeout=10)
+        response.raise_for_status()
         
-        # Parse the response as JSON
-        data = res.json()
-
-        # Extract the pages from the response
-        pages = data.get('query', {}).get('pages', {})
+        response_data = response.json()
+        pages = response_data.get('query', {}).get('pages', {})
         if not pages:
             return None
 
-        # Get the first (and usually only) page result
         page = list(pages.values())[0]
+        article_extract = page.get('extract', '')
         
-        # Extract the article text
-        extract = page.get('extract', '')
-        
-        # If no text was found, return None
-        if not extract:
+        if not article_extract:
             return None
 
-        # Remove HTML tags from the extract
-        extract = re.sub(r'<[^>]+>', '', extract)
-        
-        # Limit the text length to avoid token limits
-        extract = extract[:max_len]
-        
-        # Get the Wikipedia page ID to build a direct URL
+        article_extract = re.sub(r'<[^>]+>', '', article_extract)
+        article_extract = article_extract[:max_text_length]
         page_id = page.get('pageid')
-        url = f'https://en.wikipedia.org/?curid={page_id}' if page_id else None
+        wikipedia_url = f'https://en.wikipedia.org/?curid={page_id}' if page_id else None
 
-        # Return the text and metadata
         return {
-            'text': extract,
+            'text': article_extract,
             'source': 'Wikipedia',
-            'url': url,
+            'url': wikipedia_url,
             'status': 'success',
         }
-    except Exception as e:
-        # Log and return error
-        print(f"wiki error: {e}")
-        return {'status': 'error', 'error': str(e)}
+    except Exception as error:
+        print(f"Wikipedia API error: {error}")
+        return {'status': 'error', 'error': str(error)}
 
 
-def get_wikidata_text(wikidata_id, max_len=2000):
+def fetch_wikidata_text(wikidata_entity_id, max_text_length=2000):
     """Fetch description and information from Wikidata for a given entity."""
     try:
-        # Build parameters for the Wikidata API query
-        params = {
-            'action': 'wbgetentities',  # Get entity information
-            'ids': wikidata_id,         # The Wikidata ID to fetch
-            'format': 'json',           # Return as JSON
-            'languages': 'en',          # English language preferred
+        query_parameters = {
+            'action': 'wbgetentities',
+            'ids': wikidata_entity_id,
+            'format': 'json',
+            'languages': 'en',
         }
         
-        # Make the HTTP request to Wikidata
-        res = requests.get(WIKIDATA_API, params=params, timeout=10)
-        res.raise_for_status()
+        response = requests.get(WIKIDATA_API, params=query_parameters, timeout=10)
+        response.raise_for_status()
         
-        # Parse the response as JSON
-        data = res.json()
-
-        # Extract the entities from the response
-        entities = data.get('entities', {})
+        response_data = response.json()
+        entities = response_data.get('entities', {})
         if not entities:
             return None
 
-        # Get the first entity
         entity = list(entities.values())[0]
+        entity_description = entity.get('descriptions', {}).get('en', {}).get('value', '')
         
-        # Extract the English description
-        desc = entity.get('descriptions', {}).get('en', {}).get('value', '')
-        
-        # If no description found, return None
-        if not desc:
+        if not entity_description:
             return None
 
-        # Get the English label (name)
-        label = entity.get('labels', {}).get('en', {}).get('value', 'Unknown')
-        
-        # Build the Wikidata URL
-        url = f'https://www.wikidata.org/wiki/{wikidata_id}'
-        
-        # Combine label and description, limit by max length
-        full = f"{label}: {desc}"[:max_len]
+        entity_label = entity.get('labels', {}).get('en', {}).get('value', 'Unknown')
+        wikidata_url = f'https://www.wikidata.org/wiki/{wikidata_entity_id}'
+        combined_text = f"{entity_label}: {entity_description}"[:max_text_length]
 
-        # Return the text and metadata
         return {
-            'text': full,
+            'text': combined_text,
             'source': 'Wikidata',
-            'url': url,
+            'url': wikidata_url,
             'status': 'success',
         }
-    except Exception as e:
-        # Log and return error
-        print(f"wikidata error: {e}")
-        return {'status': 'error', 'error': str(e)}
+    except Exception as error:
+        print(f"Wikidata API error: {error}")
+        return {'status': 'error', 'error': str(error)}
 
 
-def fetch_historical_text(name, wikidata_id=None, wiki_url=None):
+def retrieve_historical_text_from_multiple_sources(landmark_name, wikidata_entity_id=None, wikipedia_url=None):
     """Fetch historical text from multiple sources in order of preference."""
-    # Try the Wikipedia URL first if provided
-    if wiki_url:
+    if wikipedia_url:
         try:
-            # Extract the article title from the URL format
-            if ':' in wiki_url:
-                title = wiki_url.split(':')[-1].replace('_', ' ')
+            if ':' in wikipedia_url:
+                article_title = wikipedia_url.split(':')[-1].replace('_', ' ')
             else:
-                title = wiki_url.replace('_', ' ')
+                article_title = wikipedia_url.replace('_', ' ')
             
-            # Attempt to get text from Wikipedia using the URL
-            res = get_wiki_text(title)
-            if res and res.get('status') == 'success':
-                return res
-        except Exception as e:
-            print(f"wiki url parse error: {e}")
+            result = fetch_wikipedia_text(article_title)
+            if result and result.get('status') == 'success':
+                return result
+        except Exception as error:
+            print(f"Error parsing Wikipedia URL: {error}")
 
-    # Try Wikidata if available
-    if wikidata_id:
-        res = get_wikidata_text(wikidata_id)
-        if res and res.get('status') == 'success':
-            return res
+    if wikidata_entity_id:
+        result = fetch_wikidata_text(wikidata_entity_id)
+        if result and result.get('status') == 'success':
+            return result
 
-    # Try searching Wikipedia by landmark name as last resort
     try:
-        res = get_wiki_text(name)
-        if res and res.get('status') == 'success':
-            return res
-    except Exception as e:
-        print(f"wiki name search error: {e}")
+        result = fetch_wikipedia_text(landmark_name)
+        if result and result.get('status') == 'success':
+            return result
+    except Exception as error:
+        print(f"Error searching Wikipedia by name: {error}")
 
-    # If all methods failed, return error status
     return {'status': 'no_data', 'text': None, 'error': 'No text found'}
 
 
-def call_ollama(prompt, temp=0.3):
+def call_ollama_language_model(user_prompt, temperature=0.3):
     """Call the local Ollama LLM service to generate a response."""
     try:
-        # Build the payload for the Ollama API
-        payload = {
-            'model': OLLAMA_MODEL,      # Use llama2 model
-            'prompt': prompt,            # The prompt/question
-            'temperature': temp,         # Temperature for randomness (0.3 = deterministic)
-            'stream': False,             # Don't stream output, get full response at once
+        request_payload = {
+            'model': OLLAMA_MODEL,
+            'prompt': user_prompt,
+            'temperature': temperature,
+            'stream': False,
         }
         
-        # Make the request to Ollama
-        res = requests.post(OLLAMA_API, json=payload, timeout=60)
-        res.raise_for_status()
+        response = requests.post(OLLAMA_API, json=request_payload, timeout=60)
+        response.raise_for_status()
+        response_data = response.json()
         
-        # Parse the response
-        data = res.json()
-        
-        # Return the generated response
-        return {'answer': data.get('response', '').strip(), 'status': 'success'}
+        return {'answer': response_data.get('response', '').strip(), 'status': 'success'}
     except requests.exceptions.ConnectionError:
-        # Ollama service is not running
         return {'status': 'error', 'error': 'Ollama not running. Try: ollama serve'}
-    except Exception as e:
-        # Other errors
-        print(f"ollama error: {e}")
-        return {'status': 'error', 'error': str(e)}
+    except Exception as error:
+        print(f"Ollama LLM error: {error}")
+        return {'status': 'error', 'error': str(error)}
 
 
-def make_prompt(name, metadata, text, question, year=None):
+def build_rag_system_prompt(landmark_name, landmark_metadata, historical_context, user_question, year_filter=None):
     """Build the RAG prompt for the LLM with system instructions, context, and question."""
-    # System instructions for the AI model
-    sys = "You are a historical expert. Answer ONLY from the provided context. Don't make stuff up. Keep it brief."
+    system_instructions = "You are a historical expert. Answer ONLY from the provided context. Don't make stuff up. Keep it brief."
     
-    # Convert metadata dictionary into readable key-value pairs
-    meta_str_parts = []
-    for k, v in metadata.items():
-        meta_str_parts.append(f"  {k}: {v}")
-    meta_str = '\n'.join(meta_str_parts)
+    metadata_lines = []
+    for metadata_key, metadata_value in landmark_metadata.items():
+        metadata_lines.append(f"  {metadata_key}: {metadata_value}")
+    metadata_string = '\n'.join(metadata_lines)
     
-    # Use the provided text or a placeholder if empty
-    ctx = text if text else "[No context available]"
+    context_text = historical_context if historical_context else "[No context available]"
+    year_hint = f"\nFocus on the year {year_filter}." if year_filter else ""
     
-    # Add year hint if provided
-    time_hint = f"\nFocus on the year {year}." if year else ""
-    
-    # Build and return the complete prompt
-    return f"""{sys}
+    complete_prompt = f"""System Instructions:
+{system_instructions}
 
-LANDMARK: {name}
+LANDMARK: {landmark_name}
 METADATA:
-{meta_str}
+{metadata_string}
 
-CONTEXT:
-{ctx}
+HISTORICAL CONTEXT:
+{context_text}
 
-QUESTION: {question}{time_hint}
+QUESTION: {user_question}{year_hint}
 
 ANSWER:"""
+    
+    return complete_prompt
 
-# API endpoint for health check - confirms the server is running
 @app.route('/api/health', methods=['GET'])
 def health():
     """Simple health check endpoint to verify the server is running."""
@@ -261,148 +191,160 @@ def health():
     })
 
 
-# API endpoint for retrieving historical text about a landmark
 @app.route('/api/retrieve-text', methods=['POST'])
 def get_text():
     """Retrieve historical text for a landmark from various sources."""
     try:
-        # Get the JSON data from the request
         data = request.get_json()
-        
-        # Extract the landmark information from the request
-        name = data.get('landmark_name', '')
-        wikidata_id = data.get('wikidata_id')
-        wiki_url = data.get('wikipedia_url')
+        landmark_name = request_data.get('landmark_name', '')
+        wikidata_entity_id = request_data.get('wikidata_id')
+        wikipedia_url = request_data.get('wikipedia_url')
 
-        # Validate that we have at least the landmark name
-        if not name:
+        if not landmark_name:
             return jsonify({'status': 'error', 'error': 'Missing landmark_name'}), 400
 
-        # Fetch historical text using multiple sources
-        res = fetch_historical_text(name, wikidata_id, wiki_url)
+        retrieval_result = retrieve_historical_text_from_multiple_sources(
+            landmark_name, 
+            wikidata_entity_id, 
+            wikipedia_url
+        )
         
-        # Generate a unique landmark ID for database storage
-        lm_id = f"lm-{name.lower().replace(' ', '-')}"
+        landmark_database_id = f"lm-{landmark_name.lower().replace(' ', '-')}"
         
-        # Save the result to the database
-        if res.get('status') == 'success':
-            db.save_historical_text(lm_id, res.get('text'), res.get('source'), res.get('url'), 'success')
+        if retrieval_result.get('status') == 'success':
+            db.save_historical_text_for_landmark(
+                landmark_database_id, 
+                retrieval_result.get('text'), 
+                retrieval_result.get('source'), 
+                retrieval_result.get('url'), 
+                'success'
+            )
         else:
-            db.save_historical_text(lm_id, status='error', error=res.get('error'))
+            db.save_historical_text_for_landmark(
+                landmark_database_id, 
+                status='error', 
+                error_message=retrieval_result.get('error')
+            )
 
-        # Return the result to the frontend
         return jsonify(res)
     except Exception as e:
         print(f"error in get_text: {e}")
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
-# API endpoint for generating answers to questions about landmarks
 @app.route('/api/generate-answer', methods=['POST'])
-def gen_answer():
+def handle_answer_generation_request():
     """Generate an AI answer to a question about a landmark."""
     try:
-        # Get the JSON data from the request
-        data = request.get_json()
-        
-        # Extract the information needed for answer generation
-        name = data.get('landmark_name', '')
-        metadata = data.get('landmark_metadata', {})
-        text = data.get('historical_text')
-        question = data.get('question', '')
-        year = data.get('year')
+        request_data = request.get_json()
+        landmark_name = request_data.get('landmark_name', '')
+        landmark_metadata = request_data.get('landmark_metadata', {})
+        historical_text = request_data.get('historical_text')
+        user_question = request_data.get('question', '')
+        year_filter = request_data.get('year')
 
-        # Validate required fields
-        if not name or not question:
+        if not landmark_name or not user_question:
             return jsonify({'status': 'error', 'error': 'Missing landmark_name or question'}), 400
 
-        # Build the prompt for the LLM
-        prompt = make_prompt(name, metadata, text, question, year)
+        system_prompt = build_rag_system_prompt(
+            landmark_name, 
+            landmark_metadata, 
+            historical_text, 
+            user_question, 
+            year_filter
+        )
         
-        # Call the Ollama service to generate an answer
-        res = call_ollama(prompt, temp=0.3)
-
-        # Generate a unique landmark ID for database storage
-        lm_id = f"lm-{name.lower().replace(' ', '-')}"
+        generation_result = call_ollama_language_model(system_prompt, temperature=0.3)
+        landmark_database_id = f"lm-{landmark_name.lower().replace(' ', '-')}"
         
-        # Save the result to the database
-        if res.get('status') == 'success':
-            db.save_answer(lm_id, question, res.get('answer'), year, 'success')
+        if generation_result.get('status') == 'success':
+            db.save_generated_answer_for_landmark(
+                landmark_database_id, 
+                user_question, 
+                generation_result.get('answer'), 
+                year_filter, 
+                'success'
+            )
         else:
-            db.save_answer(lm_id, question, year=year, status='error', error=res.get('error'))
+            db.save_generated_answer_for_landmark(
+                landmark_database_id, 
+                user_question, 
+                year_filter=year_filter, 
+                generation_status='error', 
+                error_message=generation_result.get('error')
+            )
 
-        # Return the result with source information
         return jsonify({
-            'status': res.get('status'),
-            'answer': res.get('answer'),
-            'error': res.get('error'),
+            'status': generation_result.get('status'),
+            'answer': generation_result.get('answer'),
+            'error': generation_result.get('error'),
             'source': 'Ollama LLM',
         })
-    except Exception as e:
-        print(f"error in gen_answer: {e}")
-        return jsonify({'status': 'error', 'error': str(e)}), 500
+    except Exception as error:
+        print(f"Error in handle_answer_generation_request: {error}")
+        return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
-# API endpoint for retrieving usage statistics
 @app.route('/api/statistics', methods=['GET'])
-def get_stats():
+def retrieve_platform_statistics():
     """Retrieve aggregate statistics about platform usage."""
     try:
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute('SELECT COUNT(*) FROM landmarks')
-        total_landmarks = c.fetchone()[0]
-        c.execute('SELECT COUNT(*) FROM historical_texts')
-        total_texts = c.fetchone()[0]
-        c.execute('SELECT COUNT(*) FROM generated_answers')
-        total_answers = c.fetchone()[0]
-        conn.close()
+        database_connection = db.get_database_connection()
+        database_cursor = database_connection.cursor()
+        
+        database_cursor.execute('SELECT COUNT(*) FROM landmarks')
+        total_landmarks_count = database_cursor.fetchone()[0]
+        
+        database_cursor.execute('SELECT COUNT(*) FROM historical_texts')
+        total_texts_count = database_cursor.fetchone()[0]
+        
+        database_cursor.execute('SELECT COUNT(*) FROM generated_answers')
+        total_answers_count = database_cursor.fetchone()[0]
+        
+        database_connection.close()
+        
         return jsonify({
             'status': 'success',
-            'total_landmarks': total_landmarks,
-            'total_texts': total_texts,
-            'total_answers': total_answers,
+            'total_landmarks': total_landmarks_count,
+            'total_texts': total_texts_count,
+            'total_answers': total_answers_count,
         })
-    except Exception as e:
-        print(f"stats error: {e}")
-        return jsonify({'status': 'error', 'error': str(e)}), 500
+    except Exception as error:
+        print(f"Error retrieving statistics: {error}")
+        return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
-# API endpoint for retrieving evaluation test results
 @app.route('/api/evaluation', methods=['GET'])
-def get_eval():
+def retrieve_evaluation_results():
     """Retrieve evaluation test results from the database."""
     try:
         test_name = request.args.get('test_name')
-        results = db.get_eval_results(test_name)
+        evaluation_results = db.retrieve_evaluation_results(test_name)
         return jsonify({
             'status': 'success',
-            'results': results,
-            'count': len(results),
+            'results': evaluation_results,
+            'count': len(evaluation_results),
         })
-    except Exception as e:
-        print(f"eval error: {e}")
-        return jsonify({'status': 'error', 'error': str(e)}), 500
+    except Exception as error:
+        print(f"Error retrieving evaluation results: {error}")
+        return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
-# Error handler 
 @app.errorhandler(404)
-def not_found(err):
+def handle_not_found_error(error):
     """Handle requests to non-existent endpoints."""
     return jsonify({'status': 'error', 'error': 'Not found'}), 404
+
+
 @app.errorhandler(500)
-def server_err(err):
+def handle_internal_server_error(error):
     """Handle internal server errors."""
     return jsonify({'status': 'error', 'error': 'Server error'}), 500
 
 
-# Main execution block - runs when server is started
 if __name__ == '__main__':
-    # Log startup information
     print("Starting backend...")
     print(f"Ollama API: {OLLAMA_API}")
     print(f"Model: {OLLAMA_MODEL}")
     print("Make sure Ollama is running (ollama serve)")
-    
-    # Start the Flask development server
     app.run(debug=True, host='0.0.0.0', port=5000)

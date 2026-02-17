@@ -17,198 +17,306 @@ let state = {
     isLoading: false,
 };
 
-// init map
 let map = L.map('map').setView([CONFIG.DEFAULT_LAT, CONFIG.DEFAULT_LON], CONFIG.DEFAULT_ZOOM);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '© OpenStreetMap',
 }).addTo(map);
 
-// toast notifications
-function showToast(msg, type = 'info') {
-    const bgColor = type === 'error' ? '#dc3545' : type === 'success' ? '#28a745' : '#667eea';
-    const toast = document.createElement('div');
-    toast.style.cssText = `position: fixed; top: 20px; right: 20px; background: ${bgColor}; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; animation: slideIn 0.3s ease-out;`;
-    toast.textContent = msg;
-    document.body.appendChild(toast);
-    setTimeout(() => {
-        toast.style.animation = 'slideOut 0.3s ease-out';
-        setTimeout(() => toast.remove(), 300);
+function show_toast(message, notification_type = 'info') {
+    let background_color;
+    
+    if (notification_type === 'error') {
+        background_color = '#dc3545';
+    } else if (notification_type === 'success') {
+        background_color = '#28a745';
+    } else {
+        background_color = '#667eea';
+    }
+    
+    const toast_element = document.createElement('div');
+    toast_element.style.cssText = `position: fixed; top: 20px; right: 20px; background: ${background_color}; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; animation: slideIn 0.3s ease-out;`;
+    toast_element.textContent = message;
+    document.body.appendChild(toast_element);
+    
+    setTimeout(function() {
+        toast_element.style.animation = 'slideOut 0.3s ease-out';
+        setTimeout(function() {
+            toast_element.remove();
+        }, 300);
     }, 3000);
 }
 
-function haversine(lat1, lon1, lat2, lon2) {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+function calculate_distance_between_points(latitude1, longitude1, latitude2, longitude2) {
+    const earth_radius_km = 6371;
+    
+    const latitude_difference = (latitude2 - latitude1) * Math.PI / 180;
+    const longitude_difference = (longitude2 - longitude1) * Math.PI / 180;
+    
+    const a_value = Math.sin(latitude_difference / 2) * Math.sin(latitude_difference / 2) +
+        Math.cos(latitude1 * Math.PI / 180) * Math.cos(latitude2 * Math.PI / 180) * 
+        Math.sin(longitude_difference / 2) * Math.sin(longitude_difference / 2);
+    
+    const c_value = 2 * Math.atan2(Math.sqrt(a_value), Math.sqrt(1 - a_value));
+    const distance_in_km = earth_radius_km * c_value;
+    
+    return distance_in_km;
 }
 
-function formatDist(km) {
-    return km < 1 ? (km * 1000).toFixed(0) + 'm' : km.toFixed(1) + 'km';
+function format_distance_for_display(distance_in_kilometers) {
+    if (distance_in_kilometers < 1) {
+        const distance_in_meters = distance_in_kilometers * 1000;
+        return distance_in_meters.toFixed(0) + 'm';
+    } else {
+        return distance_in_kilometers.toFixed(1) + 'km';
+    }
 }
 
-function htmlEscape(txt) {
-    return txt.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+function escape_html_text(text_to_escape) {
+    return text_to_escape
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
-// tab switching
-document.querySelectorAll('.sidebar-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-        document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        const tabName = tab.dataset.tab;
-        document.getElementById(`${tabName}-tab`).classList.add('active');
+function initialize_sidebar_tab_switching() {
+    const all_tab_buttons = document.querySelectorAll('.sidebar-tab');
+    
+    all_tab_buttons.forEach(function(tab_button) {
+        tab_button.addEventListener('click', function() {
+            const all_tabs_in_sidebar = document.querySelectorAll('.sidebar-tab');
+            all_tabs_in_sidebar.forEach(function(each_tab) {
+                each_tab.classList.remove('active');
+            });
+            
+            const all_tab_contents = document.querySelectorAll('.tab-content');
+            all_tab_contents.forEach(function(each_content) {
+                each_content.classList.remove('active');
+            });
+            
+            tab_button.classList.add('active');
+            const tab_identifier = tab_button.dataset.tab;
+            const content_element = document.getElementById(`${tab_identifier}-tab`);
+            content_element.classList.add('active');
+        });
     });
-});
+}
 
-function clearAll() {
-    state.markers.forEach(m => map.removeLayer(m));
+initialize_sidebar_tab_switching();
+
+function clear_map_and_state() {
+    state.markers.forEach(function(marker_element) {
+        map.removeLayer(marker_element);
+    });
+    
     state.markers = [];
     state.landmarks = [];
     state.selected = null;
 }
 
-async function getOverpassData(lat, lon, rad = CONFIG.SEARCH_RADIUS) {
-    const q = `[out:json];(node["historic"](around:${rad},${lat},${lon});way["historic"](around:${rad},${lat},${lon});relation["historic"](around:${rad},${lat},${lon});node["tourism"="attraction"](around:${rad},${lat},${lon});way["tourism"="attraction"](around:${rad},${lat},${lon});relation["tourism"="attraction"](around:${rad},${lat},${lon});node["amenity"="place_of_worship"](around:${rad},${lat},${lon});way["amenity"="place_of_worship"](around:${rad},${lat},${lon});relation["amenity"="place_of_worship"](around:${rad},${lat},${lon}););out tags center;`;
+async function query_overpass_for_landmarks(latitude, longitude, search_radius = CONFIG.SEARCH_RADIUS) {
+    const overpassQuery = `[out:json];(` +
+        `node["historic"](around:${search_radius},${latitude},${longitude});` +
+        `way["historic"](around:${search_radius},${latitude},${longitude});` +
+        `relation["historic"](around:${search_radius},${latitude},${longitude});` +
+        `node["tourism"="attraction"](around:${search_radius},${latitude},${longitude});` +
+        `way["tourism"="attraction"](around:${search_radius},${latitude},${longitude});` +
+        `relation["tourism"="attraction"](around:${search_radius},${latitude},${longitude});` +
+        `node["amenity"="place_of_worship"](around:${search_radius},${latitude},${longitude});` +
+        `way["amenity"="place_of_worship"](around:${search_radius},${latitude},${longitude});` +
+        `relation["amenity"="place_of_worship"](around:${search_radius},${latitude},${longitude});` +
+        `);out tags center;`;
     
     try {
-        const resp = await fetch(CONFIG.OVERPASS_URL + '?data=' + encodeURIComponent(q));
-        const data = await resp.json();
-        return data.elements || [];
-    } catch (err) {
-        console.error('overpass error:', err);
+        const request_url = CONFIG.OVERPASS_URL + '?data=' + encodeURIComponent(overpass_query);
+        const response = await fetch(request_url);
+        const responseData = await response.json();
+        const landmarkElements = responseData.elements || [];
+        return landmarkElements;
+    } catch (error) {
+        console.error('Overpass API error:', error);
         showToast('Failed to query Overpass API', 'error');
         return [];
     }
 }
 
-function buildLandmarks(els, refLat, refLon) {
-    const result = [];
-    els.forEach(el => {
-        const tags = el.tags || {};
-        const name = tags.name || '(Unnamed)';
-        let lat = el.lat;
-        let lon = el.lon;
+function build_landmarks_from_elements(overpass_elements, reference_latitude, reference_longitude) {
+    const processed_landmarks = [];
+    
+    overpass_elements.forEach(function(element) {
+        const elementTags = element.tags || {};
+        const landmarkName = elementTags.name || '(Unnamed)';
         
-        if ((!lat || !lon) && el.center) {
-            lat = el.center.lat;
-            lon = el.center.lon;
+        let landmarkLatitude = element.lat;
+        let landmarkLongitude = element.lon;
+        
+        if ((!landmarkLatitude || !landmarkLongitude) && element.center) {
+            landmarkLatitude = element.center.lat;
+            landmarkLongitude = element.center.lon;
         }
         
-        if (!lat || !lon) return;
+        if (!landmarkLatitude || !landmarkLongitude) {
+            return;
+        }
         
-        const dist = haversine(refLat, refLon, lat, lon);
-        result.push({
-            id: `${el.type}-${el.id}`,
-            name,
-            lat,
-            lon,
-            distance: dist,
-            osmType: el.type,
-            osmId: el.id,
-            tags,
-            wikidata: tags.wikidata || null,
-            wikipedia: tags.wikipedia || null,
-        });
+        const distanceFromReference = calculateDistance(
+            referenceLatitude, 
+            referenceLongitude, 
+            landmarkLatitude, 
+            landmarkLongitude
+        );
+        
+        const landmarkObject = {
+            id: `${element.type}-${element.id}`,
+            name: landmarkName,
+            lat: landmarkLatitude,
+            lon: landmarkLongitude,
+            distance: distanceFromReference,
+            osmType: element.type,
+            osmId: element.id,
+            tags: elementTags,
+            wikidata: elementTags.wikidata || null,
+            wikipedia: elementTags.wikipedia || null,
+        };
+        
+        processedLandmarks.push(landmarkObject);
     });
     
-    return result.sort((a, b) => a.distance - b.distance);
+    processedLandmarks.sort(function(landmarkA, landmarkB) {
+        return landmarkA.distance - landmarkB.distance;
+    });
+    
+    return processedLandmarks;
 }
 
-async function fetchText(landmark) {
+async function fetchHistoricalTextForLandmark(landmark) {
     if (state.cachedTexts[landmark.id]) {
         return state.cachedTexts[landmark.id];
     }
 
     try {
-        const res = await fetch(`${CONFIG.API_BASE_URL}/api/retrieve-text`, {
+        const requestPayload = {
+            landmark_name: landmark.name,
+            wikidata_id: landmark.wikidata,
+            wikipedia_url: landmark.wikipedia,
+        };
+        
+        const response = await fetch(`${CONFIG.API_BASE_URL}/api/retrieve-text`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                landmark_name: landmark.name,
-                wikidata_id: landmark.wikidata,
-                wikipedia_url: landmark.wikipedia,
-            }),
+            body: JSON.stringify(requestPayload),
         });
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        state.cachedTexts[landmark.id] = data;
-        return data;
-    } catch (err) {
-        console.error('text fetch error:', err);
-        return { status: 'error', text: null, error: err.message };
+        if (!response.ok) {
+            throw new Error(`HTTP Error ${response.status}`);
+        }
+        
+        const responseData = await response.json();
+        
+        state.cachedTexts[landmark.id] = responseData;
+        return responseData;
+    } catch (error) {
+        console.error('Error fetching historical text:', error);
+        return { 
+            status: 'error', 
+            text: null, 
+            error: error.message 
+        };
     }
 }
 
-async function generateAns(landmark, q, yr = null) {
-    const key = `${landmark.id}-${q}-${yr || 'all'}`;
-    if (state.cachedAnswers[key]) {
-        return state.cachedAnswers[key];
+async function generateLLMAnswerForLandmark(landmark, userQuestion, yearFilter = null) {
+    const cacheKey = `${landmark.id}-${userQuestion}-${yearFilter || 'all'}`;
+    
+    if (state.cachedAnswers[cacheKey]) {
+        return state.cachedAnswers[cacheKey];
     }
 
     try {
-        const res = await fetch(`${CONFIG.API_BASE_URL}/api/generate-answer`, {
+        const requestPayload = {
+            landmark_name: landmark.name,
+            landmark_metadata: landmark.tags,
+            historical_text: state.cachedTexts[landmark.id]?.text,
+            question: userQuestion,
+            year: yearFilter,
+        };
+        
+        const response = await fetch(`${CONFIG.API_BASE_URL}/api/generate-answer`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                landmark_name: landmark.name,
-                landmark_metadata: landmark.tags,
-                historical_text: state.cachedTexts[landmark.id]?.text,
-                question: q,
-                year: yr,
-            }),
+            body: JSON.stringify(requestPayload),
         });
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        state.cachedAnswers[key] = data;
-        return data;
-    } catch (err) {
-        console.error('answer gen error:', err);
-        return { status: 'error', answer: null, error: err.message };
+        if (!response.ok) {
+            throw new Error(`HTTP Error ${response.status}`);
+        }
+        
+        const responseData = await response.json();
+        
+        state.cachedAnswers[cacheKey] = responseData;
+        return responseData;
+    } catch (error) {
+        console.error('Error generating LLM answer:', error);
+        return { 
+            status: 'error', 
+            answer: null, 
+            error: error.message 
+        };
     }
 }
 
-function renderList() {
-    const list = document.getElementById('resultsList');
+function renderLandmarkList() {
+    const listContainer = document.getElementById('resultsList');
     
     if (state.landmarks.length === 0) {
-        list.innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>No landmarks found. Try clicking elsewhere on the map.</p></div>`;
+        listContainer.innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>No landmarks found. Try clicking elsewhere on the map.</p></div>`;
         return;
     }
 
-    list.innerHTML = state.landmarks.map(lm => `
-        <div class="landmark-item ${state.selected?.id === lm.id ? 'selected' : ''}" onclick="selectLandmark('${lm.id}')">
-            <div class="landmark-item-name">${htmlEscape(lm.name)}</div>
-            <div class="landmark-item-type">${lm.osmType} • ${lm.tags.historic || lm.tags.tourism || lm.tags.amenity || 'landmark'}</div>
-            <div class="landmark-item-dist">↔ ${formatDist(lm.distance)}</div>
-        </div>
-    `).join('');
+    const landmarkItemsHTML = state.landmarks.map(function(landmark) {
+        const isSelected = state.selected?.id === landmark.id ? 'selected' : '';
+        const landmarkType = landmark.tags.historic || landmark.tags.tourism || landmark.tags.amenity || 'landmark';
+        const displayDistance = formatDistanceForDisplay(landmark.distance);
+        const escapedName = escapeHtmlText(landmark.name);
+        
+        return `
+            <div class="landmark-item ${isSelected}" onclick="selectLandmark('${landmark.id}')">
+                <div class="landmark-item-name">${escapedName}</div>
+                <div class="landmark-item-type">${landmark.osmType} • ${landmarkType}</div>
+                <div class="landmark-item-dist">↔ ${displayDistance}</div>
+            </div>
+        `;
+    }).join('');
+    
+    listContainer.innerHTML = landmarkItemsHTML;
 }
 
-async function renderDetails(lm) {
-    const panel = document.getElementById('detailsPanel');
+async function renderLandmarkDetailsPanel(landmark) {
+    const detailsPanelElement = document.getElementById('detailsPanel');
+    const escapedLandmarkName = escapeHtmlText(landmark.name);
+    const formattedCoordinates = `${landmark.lat.toFixed(4)}, ${landmark.lon.toFixed(4)}`;
+    const formattedDistance = formatDistanceForDisplay(landmark.distance);
 
-    panel.innerHTML = `
+    const tagsHTML = Object.entries(landmark.tags).map(function([tagKey, tagValue]) {
+        return `<div class="tag"><span class="tag-key">${escapeHtmlText(tagKey)}:</span><span>${escapeHtmlText(tagValue)}</span></div>`;
+    }).join('');
+
+    detailsPanelElement.innerHTML = `
         <div class="panel-section">
             <h3>Location & Info</h3>
-            <div class="metadata-row"><span class="metadata-row-label">Name:</span><span>${htmlEscape(lm.name)}</span></div>
-            <div class="metadata-row"><span class="metadata-row-label">Type:</span><span>${lm.osmType}</span></div>
-            <div class="metadata-row"><span class="metadata-row-label">Coords:</span><span>${lm.lat.toFixed(4)}, ${lm.lon.toFixed(4)}</span></div>
-            <div class="metadata-row"><span class="metadata-row-label">Distance:</span><span>${formatDist(lm.distance)}</span></div>
-            <div class="metadata-row"><span class="metadata-row-label">OSM ID:</span><span>${lm.osmId}</span></div>
+            <div class="metadata-row"><span class="metadata-row-label">Name:</span><span>${escapedLandmarkName}</span></div>
+            <div class="metadata-row"><span class="metadata-row-label">Type:</span><span>${landmark.osmType}</span></div>
+            <div class="metadata-row"><span class="metadata-row-label">Coordinates:</span><span>${formattedCoordinates}</span></div>
+            <div class="metadata-row"><span class="metadata-row-label">Distance:</span><span>${formattedDistance}</span></div>
+            <div class="metadata-row"><span class="metadata-row-label">OSM ID:</span><span>${landmark.osmId}</span></div>
         </div>
 
         <div class="panel-section">
             <h3>Tags</h3>
             <div class="tags-grid">
-                ${Object.entries(lm.tags).map(([k, v]) => `<div class="tag"><span class="tag-key">${htmlEscape(k)}:</span><span>${htmlEscape(v)}</span></div>`).join('')}
+                ${tagsHTML}
             </div>
         </div>
 
@@ -219,34 +327,35 @@ async function renderDetails(lm) {
         </div>
     `;
 
-    const txt = await fetchText(lm);
-    const status = document.getElementById('contextStatus');
-    const ctx = document.getElementById('contextText');
+    const historicalTextData = await fetchHistoricalTextForLandmark(landmark);
+    const statusElement = document.getElementById('contextStatus');
+    const contextElement = document.getElementById('contextText');
 
-    if (txt.status === 'success' && txt.text) {
-        status.innerHTML = `<span class="status-badge ok">Got it</span>`;
-        ctx.textContent = txt.text;
-        ctx.style.display = 'block';
-    } else if (txt.status === 'no_data') {
-        status.innerHTML = `<span class="status-badge warning">No text</span>`;
+    if (historicalTextData.status === 'success' && historicalTextData.text) {
+        statusElement.innerHTML = `<span class="status-badge ok">Got it</span>`;
+        contextElement.textContent = historicalTextData.text;
+        contextElement.style.display = 'block';
+    } else if (historicalTextData.status === 'no_data') {
+        statusElement.innerHTML = `<span class="status-badge warning">No text available</span>`;
     } else {
-        status.innerHTML = `<span class="status-badge error">Error: ${txt.error || 'unknown'}</span>`;
+        const errorMessage = historicalTextData.error || 'unknown error';
+        statusElement.innerHTML = `<span class="status-badge error">Error: ${errorMessage}</span>`;
     }
 }
 
-async function renderRAG(lm) {
-    const panel = document.getElementById('ragPanel');
+async function renderRAGPanel(landmark) {
+    const ragPanelElement = document.getElementById('ragPanel');
 
-    panel.innerHTML = `
+    ragPanelElement.innerHTML = `
         <div class="panel-section">
             <h3>Ask Something</h3>
             <input type="text" class="question-input" id="questionInput" placeholder="e.g., What happened here in 1850?" />
             <input type="number" class="year-input" id="yearInput" placeholder="Year (optional)" min="1000" max="2100" />
-            <button onclick="genAnswer()" style="width: 100%;">Generate</button>
+            <button onclick="generateAndDisplayAnswer()" style="width: 100%;">Generate</button>
         </div>
 
         <div class="panel-section">
-            <h3>Prompt</h3>
+            <h3>Prompt Context</h3>
             <div id="promptTemplate" class="prompt-builder"></div>
         </div>
 
@@ -259,176 +368,226 @@ async function renderRAG(lm) {
         </div>
     `;
 
-    const txt = await fetchText(lm);
-    const prompt = buildPrompt(lm, txt);
-    document.getElementById('promptTemplate').textContent = prompt;
+    const historicalTextData = await fetchHistoricalTextForLandmark(landmark);
+    const constructedPrompt = buildSystemPromptForLandmark(landmark, historicalTextData);
+    document.getElementById('promptTemplate').textContent = constructedPrompt;
 }
 
-function buildPrompt(lm, txt) {
-    const sys = `You are a historical assistant. Answer ONLY using the provided context. If you don't know, say so. Don't make stuff up.`;
+function buildSystemPromptForLandmark(landmark, historicalText) {
+    const systemInstruction = `You are a historical assistant. Answer ONLY using the provided context. If you don't know, say so. Don't make stuff up.`;
     
-    const meta = Object.entries(lm.tags)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join('\n');
+    const metadataLines = Object.entries(landmark.tags).map(function([tagKey, tagValue]) {
+        return `${tagKey}: ${tagValue}`;
+    }).join('\n');
 
-    const context = txt.status === 'success' && txt.text ? txt.text : '[No text available]';
+    const availableContext = historicalText.status === 'success' && historicalText.text 
+        ? historicalText.text 
+        : '[No historical text available]';
 
-    return `SYSTEM:
-${sys}
+    const formattedCoordinates = `${landmark.lat.toFixed(4)}, ${landmark.lon.toFixed(4)}`;
 
-LANDMARK:
-Name: ${lm.name}
-Type: ${lm.osmType}
-Coords: ${lm.lat.toFixed(4)}, ${lm.lon.toFixed(4)}
+    const completePrompt = `SYSTEM INSTRUCTION:
+${systemInstruction}
 
-TAGS:
-${meta}
+LANDMARK INFORMATION:
+Name: ${landmark.name}
+Type: ${landmark.osmType}
+Coordinates: ${formattedCoordinates}
 
-CONTEXT:
-${context}
+LANDMARK METADATA:
+${metadataLines}
 
-Answer based only on the above info.`;
+HISTORICAL CONTEXT:
+${availableContext}
+
+Please answer based ONLY on the above information.`;
+    
+    return completePrompt;
 }
 
-async function genAnswer() {
-    if (!state.selected) return;
-
-    const q = document.getElementById('questionInput')?.value || '';
-    const yr = document.getElementById('yearInput')?.value || null;
-
-    if (!q) {
-        showToast('Enter a question', 'error');
+async function generateAndDisplayAnswer() {
+    if (!state.selected) {
         return;
     }
 
-    const btn = event.target;
-    btn.disabled = true;
-    btn.textContent = 'Thinking...';
+    const userQuestionElement = document.getElementById('questionInput');
+    const yearFilterElement = document.getElementById('yearInput');
+    
+    const userQuestion = userQuestionElement?.value || '';
+    const selectedYear = yearFilterElement?.value || null;
+
+    if (!userQuestion.trim()) {
+        showToast('Please enter a question', 'error');
+        return;
+    }
+
+    const generateButton = event.target;
+    generateButton.disabled = true;
+    generateButton.textContent = 'Thinking...';
 
     try {
-        const ans = await generateAns(state.selected, q, yr ? parseInt(yr) : null);
-        const sec = document.getElementById('answerSection');
+        const parsedYear = selectedYear ? parseInt(selectedYear) : null;
+        const llmResponse = await generateLLMAnswerForLandmark(state.selected, userQuestion, parsedYear);
+        const answerSectionElement = document.getElementById('answerSection');
 
-        if (ans.status === 'success' && ans.answer) {
-            document.getElementById('answerText').textContent = ans.answer;
+        if (llmResponse.status === 'success' && llmResponse.answer) {
+            document.getElementById('answerText').textContent = llmResponse.answer;
             document.getElementById('answerSource').innerHTML = `<strong>Source:</strong> Local LLM (Ollama)`;
-            sec.style.display = 'block';
-            showToast('Done!', 'success');
+            answerSectionElement.style.display = 'block';
+            showToast('Answer generated successfully!', 'success');
         } else {
-            document.getElementById('answerText').textContent = `Error: ${ans.error || 'failed'}`;
-            sec.style.display = 'block';
-            showToast('Failed to generate', 'error');
+            const errorMessage = llmResponse.error || 'unknown error';
+            document.getElementById('answerText').textContent = `Error: ${errorMessage}`;
+            answerSectionElement.style.display = 'block';
+            showToast('Failed to generate answer', 'error');
         }
     } finally {
-        btn.disabled = false;
-        btn.textContent = 'Generate';
+        generateButton.disabled = false;
+        generateButton.textContent = 'Generate';
     }
 }
 
-async function selectLandmark(id) {
-    state.selected = state.landmarks.find(l => l.id === id);
-    if (!state.selected) return;
+async function selectLandmark(landmarkId) {
+    state.selected = state.landmarks.find(function(eachLandmark) {
+        return eachLandmark.id === landmarkId;
+    });
+    
+    if (!state.selected) {
+        return;
+    }
 
-    renderList();
+    renderLandmarkList();
+    
     map.flyTo([state.selected.lat, state.selected.lon], 16);
     
-    await renderDetails(state.selected);
-    await renderRAG(state.selected);
+    await renderLandmarkDetailsPanel(state.selected);
+    await renderRAGPanel(state.selected);
 
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    const allTabButtons = document.querySelectorAll('.sidebar-tab');
+    allTabButtons.forEach(function(tabButton) {
+        tabButton.classList.remove('active');
+    });
+    
+    const allTabContents = document.querySelectorAll('.tab-content');
+    allTabContents.forEach(function(tabContent) {
+        tabContent.classList.remove('active');
+    });
+    
     document.querySelector('[data-tab="details"]').classList.add('active');
     document.getElementById('details-tab').classList.add('active');
 }
 
-async function searchPlace(name) {
-    if (!name.trim()) return;
-
-    try {
-        const resp = await fetch(`${CONFIG.NOMINATIM_URL}?q=${encodeURIComponent(name)}&format=json&limit=1`);
-        const data = await resp.json();
-
-        if (data.length === 0) {
-            showToast(`"${name}" not found`, 'error');
-            return;
-        }
-
-        const res = data[0];
-        const lat = parseFloat(res.lat);
-        const lon = parseFloat(res.lon);
-
-        map.flyTo([lat, lon], 14);
-        queryLandmarks(lat, lon);
-        showToast(`Found: ${res.display_name}`, 'success');
-    } catch (err) {
-        console.error('search error:', err);
-        showToast('Search failed', 'error');
-    }
-}
-
-async function queryLandmarks(lat, lon) {
-    clearAll();
-    document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="loading-spinner"></div><p>Querying Overpass...</p></div>`;
-
-    const els = await getOverpassData(lat, lon);
-    state.landmarks = buildLandmarks(els, lat, lon);
-
-    if (state.landmarks.length === 0) {
-        document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>No landmarks here.</p></div>`;
+async function searchForPlace(placeName) {
+    if (!placeName.trim()) {
         return;
     }
 
-    state.landmarks.forEach(lm => {
-        const marker = L.marker([lm.lat, lm.lon]).addTo(map);
-        marker.on('click', () => selectLandmark(lm.id));
-        state.markers.push(marker);
+    try {
+        const searchUrl = `${CONFIG.NOMINATIM_URL}?q=${encodeURIComponent(placeName)}&format=json&limit=1`;
+        const searchResponse = await fetch(searchUrl);
+        const searchResults = await searchResponse.json();
+
+        if (searchResults.length === 0) {
+            showToast(`Place "${placeName}" not found`, 'error');
+            return;
+        }
+
+        const firstResult = searchResults[0];
+        const foundLatitude = parseFloat(firstResult.lat);
+        const foundLongitude = parseFloat(firstResult.lon);
+
+        map.flyTo([foundLatitude, foundLongitude], 14);
+        queryLandmarksAtLocation(foundLatitude, foundLongitude);
+        showToast(`Found: ${firstResult.display_name}`, 'success');
+    } catch (error) {
+        console.error('Place search error:', error);
+        showToast('Search failed - please try again', 'error');
+    }
+}
+
+async function queryLandmarksAtLocation(latitude, longitude) {
+    clearMapAndState();
+    
+    document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="loading-spinner"></div><p>Querying for landmarks...</p></div>`;
+
+    const overpassElements = await queryOverpassForLandmarks(latitude, longitude);
+    state.landmarks = buildLandmarksFromElements(overpassElements, latitude, longitude);
+
+    if (state.landmarks.length === 0) {
+        document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>No landmarks found in this area.</p></div>`;
+        return;
+    }
+
+    state.landmarks.forEach(function(landmark) {
+        const markerElement = L.marker([landmark.lat, landmark.lon]).addTo(map);
+        
+        markerElement.on('click', function() {
+            selectLandmark(landmark.id);
+        });
+        
+        state.markers.push(markerElement);
     });
 
-    renderList();
-    showToast(`Found ${state.landmarks.length} landmarks`, 'success');
+    renderLandmarkList();
+    const landmarkCount = state.landmarks.length;
+    showToast(`Found ${landmarkCount} landmarks in this area`, 'success');
 }
 
 
 
-function locateMe() {
+function locateUserAndFindLandmarks() {
     if (!navigator.geolocation) {
-        showToast('Geolocation not supported', 'error');
+        showToast('Geolocation not supported by your browser', 'error');
         return;
     }
 
     navigator.geolocation.getCurrentPosition(
-        (pos) => {
-            const lat = pos.coords.latitude;
-            const lon = pos.coords.longitude;
-            map.flyTo([lat, lon], 14);
-            queryLandmarks(lat, lon);
-            showToast('Found your location', 'success');
+        function(position) {
+            const userLatitude = position.coords.latitude;
+            const userLongitude = position.coords.longitude;
+            
+            map.flyTo([userLatitude, userLongitude], 14);
+            queryLandmarksAtLocation(userLatitude, userLongitude);
+            showToast('Found your location successfully', 'success');
         },
-        (err) => {
-            console.error('geo error:', err);
-            showToast('Geolocation failed', 'error');
+        function(error) {
+            console.error('Geolocation error:', error);
+            showToast('Unable to access your location - please check permissions', 'error');
         }
     );
 }
 
-function resetMap() {
-    clearAll();
-    document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Click the map to find landmarks.</p></div>`;
-    document.getElementById('detailsPanel').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Select a landmark.</p></div>`;
-    document.getElementById('ragPanel').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Select a landmark.</p></div>`;
+function resetMapToInitialState() {
+    clearMapAndState();
+    
+    document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Click the map to find landmarks or use the search.</p></div>`;
+    document.getElementById('detailsPanel').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Select a landmark to view details.</p></div>`;
+    document.getElementById('ragPanel').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Select a landmark to ask questions.</p></div>`;
+    
     map.flyTo([CONFIG.DEFAULT_LAT, CONFIG.DEFAULT_LON], CONFIG.DEFAULT_ZOOM);
-    showToast('Reset', 'success');
+    showToast('Map reset to initial state', 'success');
 }
 
-document.getElementById('searchInput').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') searchPlace(e.target.value);
+document.getElementById('searchInput').addEventListener('keypress', function(event) {
+    if (event.key === 'Enter') {
+        const searchValue = event.target.value;
+        searchForPlace(searchValue);
+        event.target.value = '';
+    }
 });
 
-document.getElementById('gpsBtn').addEventListener('click', locateMe);
-document.getElementById('resetBtn').addEventListener('click', resetMap);
-
-map.on('click', (e) => {
-    queryLandmarks(e.latlng.lat, e.latlng.lng);
+document.getElementById('gpsBtn').addEventListener('click', function() {
+    locateUserAndFindLandmarks();
 });
 
-console.log('App loaded. Click the map to start.');
+document.getElementById('resetBtn').addEventListener('click', function() {
+    resetMapToInitialState();
+});
+
+map.on('click', function(mapClickEvent) {
+    const clickedLatitude = mapClickEvent.latlng.lat;
+    const clickedLongitude = mapClickEvent.latlng.lng;
+    queryLandmarksAtLocation(clickedLatitude, clickedLongitude);
+});
+
+console.log('Interactive History Platform loaded successfully. Click on the map or search for a place to begin.');
