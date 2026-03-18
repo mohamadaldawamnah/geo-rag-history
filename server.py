@@ -19,6 +19,11 @@ OLLAMA_MODEL = 'llama2'
 WIKI_API = 'https://en.wikipedia.org/w/api.php'
 WIKIDATA_API = 'https://www.wikidata.org/w/api.php'
 
+# User-Agent for API requests (required by Wikipedia)
+HEADERS = {
+    'User-Agent': 'HistoryPlatform/1.0 (Educational Research) +https://github.com'
+}
+
 
 def fetch_wikipedia_text(article_title, max_text_length=2000):
     """Fetch historical text from Wikipedia for a given article title."""
@@ -32,7 +37,7 @@ def fetch_wikipedia_text(article_title, max_text_length=2000):
             'redirects': 1,
         }
         
-        response = requests.get(WIKI_API, params=query_parameters, timeout=10)
+        response = requests.get(WIKI_API, params=query_parameters, headers=HEADERS, timeout=10)
         response.raise_for_status()
         
         response_data = response.json()
@@ -72,7 +77,7 @@ def fetch_wikidata_text(wikidata_entity_id, max_text_length=2000):
             'languages': 'en',
         }
         
-        response = requests.get(WIKIDATA_API, params=query_parameters, timeout=10)
+        response = requests.get(WIKIDATA_API, params=query_parameters, headers=HEADERS, timeout=10)
         response.raise_for_status()
         
         response_data = response.json()
@@ -195,7 +200,7 @@ def health():
 def get_text():
     """Retrieve historical text for a landmark from various sources."""
     try:
-        data = request.get_json()
+        request_data = request.get_json() or {}
         landmark_name = request_data.get('landmark_name', '')
         wikidata_entity_id = request_data.get('wikidata_id')
         wikipedia_url = request_data.get('wikipedia_url')
@@ -222,11 +227,11 @@ def get_text():
         else:
             db.save_historical_text_for_landmark(
                 landmark_database_id, 
-                status='error', 
+                retrieval_status='error', 
                 error_message=retrieval_result.get('error')
             )
 
-        return jsonify(res)
+        return jsonify(retrieval_result)
     except Exception as e:
         print(f"error in get_text: {e}")
         return jsonify({'status': 'error', 'error': str(e)}), 500
@@ -327,6 +332,114 @@ def retrieve_evaluation_results():
         })
     except Exception as error:
         print(f"Error retrieving evaluation results: {error}")
+        return jsonify({'status': 'error', 'error': str(error)}), 500
+
+
+@app.route('/api/fetch-wikipedia', methods=['POST'])
+def fetch_wiki_by_wikidata():
+    """Fetch Wikipedia article from Wikidata ID."""
+    try:
+        request_data = request.get_json() or {}
+        wikidata_id = request_data.get('wikidata_id')
+        
+        if not wikidata_id:
+            return jsonify({'status': 'error', 'error': 'Missing wikidata_id'}), 400
+        
+        # Try to get Wikipedia title from Wikidata
+        wikidata_params = {
+            'action': 'wbgetentities',
+            'ids': wikidata_id,
+            'format': 'json',
+            'languages': 'en',
+            'props': 'labels|descriptions|sitelinks',
+        }
+        
+        wikidata_response = requests.get(WIKIDATA_API, params=wikidata_params, headers=HEADERS, timeout=10)
+        wikidata_response.raise_for_status()
+        
+        wikidata_data = wikidata_response.json()
+        entities = wikidata_data.get('entities', {})
+        
+        if not entities:
+            return jsonify({'status': 'no_data', 'error': 'No data found for Wikidata ID'}), 200
+        
+        entity = list(entities.values())[0]
+        
+        # Try to get Wikipedia article title from sitelinks
+        sitelinks = entity.get('sitelinks', {})
+        wikipedia_site = sitelinks.get('enwiki', {})
+        wikipedia_title = wikipedia_site.get('title')
+        
+        if not wikipedia_title:
+            return jsonify({'status': 'no_data', 'error': 'No Wikipedia article found'}), 200
+        
+        # Fetch Wikipedia article
+        wiki_result = fetch_wikipedia_text(wikipedia_title, max_text_length=3000)
+        
+        if wiki_result and wiki_result.get('status') == 'success':
+            return jsonify({
+                'status': 'success',
+                'text': wiki_result.get('text'),
+                'source': wiki_result.get('source'),
+                'url': wiki_result.get('url')
+            })
+        else:
+            return jsonify({'status': 'no_data', 'error': 'Failed to fetch Wikipedia'}), 200
+            
+    except Exception as error:
+        print(f"Error fetching Wikipedia: {error}")
+        return jsonify({'status': 'error', 'error': str(error)}), 500
+
+
+@app.route('/api/summarize-wiki', methods=['POST'])
+def summarize_wikipedia_text():
+    """Summarize Wikipedia text using Mistral 7B (under 40 words / 2 sentences)."""
+    try:
+        request_data = request.get_json() or {}
+        wikipedia_text = request_data.get('wikipedia_text', '')
+        landmark_name = request_data.get('landmark_name', 'this place')
+        max_words = request_data.get('max_words', 40)
+        
+        if not wikipedia_text:
+            return jsonify({'status': 'error', 'error': 'Missing wikipedia_text'}), 400
+        
+        # Create a prompt for Mistral to summarize
+        summary_prompt = f"""Summarize the following text about {landmark_name} in exactly 2 sentences, keeping it under {max_words} words. Focus on historical significance and key facts. No introductions or explanations, just the summary:
+
+TEXT:
+{wikipedia_text[:1500]}
+
+SUMMARY:"""
+        
+        # Use Mistral 7B for summarization
+        mistral_payload = {
+            'model': 'mistral',  # or 'mistral:7b' depending on your Ollama setup
+            'prompt': summary_prompt,
+            'stream': False,
+            'temperature': 0.3,
+            'top_p': 0.9,
+        }
+        
+        llm_response = requests.post(OLLAMA_API, json=mistral_payload, timeout=60)
+        llm_response.raise_for_status()
+        
+        llm_data = llm_response.json()
+        summary_text = llm_data.get('response', '').strip()
+        
+        if not summary_text:
+            return jsonify({'status': 'error', 'error': 'LLM returned empty response'}), 500
+        
+        return jsonify({
+            'status': 'success',
+            'summary': summary_text,
+            'model': 'mistral',
+            'word_count': len(summary_text.split())
+        })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({'status': 'error', 'error': 'LLM timeout - Mistral might be offline'}), 500
+    except Exception as error:
+        print(f"Error summarizing Wikipedia: {error}")
         return jsonify({'status': 'error', 'error': str(error)}), 500
 
 

@@ -395,6 +395,11 @@
             color: #721c24;
         }
 
+        .status-badge.auto-generated {
+            background-color: #ffc107;
+            color: #000;
+        }
+
         .export-btn {
             width: 100%;
             margin-top: 10px;
@@ -430,6 +435,16 @@
                 flex: 1;
             }
         }
+
+        .history-marker {
+            background: none !important;
+            border: none !important;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            filter: drop-shadow(0 1px 3px rgba(0,0,0,0.3));
+        }
     </style>
 </head>
 
@@ -464,7 +479,7 @@
             </div>
 
             <div class="sidebar-content">
-                <!-- Results Tab -->
+                <!-- Results tab -->
                 <div id="results-tab" class="tab-content active">
                     <div id="resultsList" class="landmarks-list">
                         <div class="empty-state">
@@ -474,7 +489,7 @@
                     </div>
                 </div>
 
-                <!-- Details Tab -->
+                <!-- Details tab -->
                 <div id="details-tab" class="tab-content">
                     <div id="detailsPanel" class="details-panel">
                         <div class="empty-state">
@@ -484,7 +499,7 @@
                     </div>
                 </div>
 
-                <!-- RAG Tab -->
+                <!-- RAG tab -->
                 <div id="rag-tab" class="tab-content">
                     <div id="ragPanel" class="details-panel">
                         <div class="empty-state">
