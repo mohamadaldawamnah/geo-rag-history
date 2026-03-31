@@ -1,13 +1,9 @@
-"""
-Backend Flask API server for the Interactive History Platform.
-Handles text retrieval from Wikipedia/Wikidata and answer generation using a local LLM.
-"""
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 import json
 import re
+import os
 from db import Database
 
 app = Flask(__name__)
@@ -18,15 +14,14 @@ OLLAMA_API = 'http://localhost:11434/api/generate'
 OLLAMA_MODEL = 'llama2'
 WIKI_API = 'https://en.wikipedia.org/w/api.php'
 WIKIDATA_API = 'https://www.wikidata.org/w/api.php'
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN', '')
 
-# User-Agent for API requests (required by Wikipedia)
 HEADERS = {
     'User-Agent': 'HistoryPlatform/1.0 (Educational Research) +https://github.com'
 }
 
 
 def fetch_wikipedia_text(article_title, max_text_length=2000):
-    """Fetch historical text from Wikipedia for a given article title."""
     try:
         query_parameters = {
             'action': 'query',
@@ -63,12 +58,10 @@ def fetch_wikipedia_text(article_title, max_text_length=2000):
             'status': 'success',
         }
     except Exception as error:
-        print(f"Wikipedia API error: {error}")
         return {'status': 'error', 'error': str(error)}
 
 
 def fetch_wikidata_text(wikidata_entity_id, max_text_length=2000):
-    """Fetch description and information from Wikidata for a given entity."""
     try:
         query_parameters = {
             'action': 'wbgetentities',
@@ -102,12 +95,10 @@ def fetch_wikidata_text(wikidata_entity_id, max_text_length=2000):
             'status': 'success',
         }
     except Exception as error:
-        print(f"Wikidata API error: {error}")
         return {'status': 'error', 'error': str(error)}
 
 
 def retrieve_historical_text_from_multiple_sources(landmark_name, wikidata_entity_id=None, wikipedia_url=None):
-    """Fetch historical text from multiple sources in order of preference."""
     if wikipedia_url:
         try:
             if ':' in wikipedia_url:
@@ -119,7 +110,7 @@ def retrieve_historical_text_from_multiple_sources(landmark_name, wikidata_entit
             if result and result.get('status') == 'success':
                 return result
         except Exception as error:
-            print(f"Error parsing Wikipedia URL: {error}")
+            pass
 
     if wikidata_entity_id:
         result = fetch_wikidata_text(wikidata_entity_id)
@@ -131,13 +122,12 @@ def retrieve_historical_text_from_multiple_sources(landmark_name, wikidata_entit
         if result and result.get('status') == 'success':
             return result
     except Exception as error:
-        print(f"Error searching Wikipedia by name: {error}")
+        pass
 
     return {'status': 'no_data', 'text': None, 'error': 'No text found'}
 
 
 def call_ollama_language_model(user_prompt, temperature=0.3):
-    """Call the local Ollama LLM service to generate a response."""
     try:
         request_payload = {
             'model': OLLAMA_MODEL,
@@ -154,13 +144,64 @@ def call_ollama_language_model(user_prompt, temperature=0.3):
     except requests.exceptions.ConnectionError:
         return {'status': 'error', 'error': 'Ollama not running. Try: ollama serve'}
     except Exception as error:
-        print(f"Ollama LLM error: {error}")
+        return {'status': 'error', 'error': str(error)}
+
+
+def call_github_ai_unconstrained(user_prompt, temperature=0.7):
+    try:
+        github_api_endpoint = 'https://models.inference.ai.azure.com/chat/completions'
+        
+        request_payload = {
+            'model': 'gpt-4o',
+            'messages': [
+                {
+                    'role': 'system',
+                    'content': 'You are a knowledgeable historian assistant. You can provide information based on your training, even if sources are not explicitly cited. Your responses are not fact-checked against Wikipedia.'
+                },
+                {
+                    'role': 'user',
+                    'content': user_prompt
+                }
+            ],
+            'temperature': temperature,
+            'max_tokens': 1000,
+        }
+        
+        headers = {
+            'Authorization': f'Bearer {GITHUB_TOKEN}',
+            'Content-Type': 'application/json',
+        }
+        
+        response = requests.post(github_api_endpoint, json=request_payload, headers=headers, timeout=30)
+        
+        response.raise_for_status()
+        response_data = response.json()
+        
+        answer_text = response_data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+        
+        if answer_text:
+            return {'answer': answer_text, 'status': 'success'}
+        else:
+            return {'status': 'error', 'error': 'No response from GitHub AI'}
+            
+    except requests.exceptions.ConnectionError:
+        return {'status': 'error', 'error': 'Cannot reach GitHub API. Check internet connection.'}
+    except requests.exceptions.HTTPError as http_error:
+        error_msg = str(http_error)
+        if '401' in error_msg or '403' in error_msg:
+            return {'status': 'error', 'error': 'GitHub token invalid or expired. Check GITHUB_TOKEN.'}
+        return {'status': 'error', 'error': f'GitHub API error: {error_msg}'}
+    except Exception as error:
         return {'status': 'error', 'error': str(error)}
 
 
 def build_rag_system_prompt(landmark_name, landmark_metadata, historical_context, user_question, year_filter=None):
-    """Build the RAG prompt for the LLM with system instructions, context, and question."""
-    system_instructions = "You are a historical expert. Answer ONLY from the provided context. Don't make stuff up. Keep it brief."
+    system_instructions = """You are a historical fact extractor. CRITICAL RULES:
+1. Extract ONLY sentences and facts that exist in the provided context
+2. Do NOT invent, infer, or generate plausible-sounding but false information
+3. If the requested year is NOT mentioned in the context, respond: "No information for that time period in the source material"
+4. If the question cannot be answered from the context, explicitly say so
+5. Your answer must be grounded in the provided text - never speculate"""
     
     metadata_lines = []
     for metadata_key, metadata_value in landmark_metadata.items():
@@ -168,7 +209,10 @@ def build_rag_system_prompt(landmark_name, landmark_metadata, historical_context
     metadata_string = '\n'.join(metadata_lines)
     
     context_text = historical_context if historical_context else "[No context available]"
-    year_hint = f"\nFocus on the year {year_filter}." if year_filter else ""
+    
+    year_requirement = ""
+    if year_filter:
+        year_requirement = f"\n[CRITICAL] Only answer if the year {year_filter} is explicitly mentioned in the context. If not found, respond: 'No information for the year {year_filter} in the source material.'"
     
     complete_prompt = f"""System Instructions:
 {system_instructions}
@@ -180,7 +224,9 @@ METADATA:
 HISTORICAL CONTEXT:
 {context_text}
 
-QUESTION: {user_question}{year_hint}
+QUESTION: {user_question}{year_requirement}
+
+REQUIREMENT: Extract your answer directly from the provided context. Do not invent or infer facts.
 
 ANSWER:"""
     
@@ -188,7 +234,6 @@ ANSWER:"""
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    """Simple health check endpoint to verify the server is running."""
     return jsonify({
         'status': 'ok',
         'service': 'History Platform API',
@@ -198,7 +243,6 @@ def health():
 
 @app.route('/api/retrieve-text', methods=['POST'])
 def get_text():
-    """Retrieve historical text for a landmark from various sources."""
     try:
         request_data = request.get_json() or {}
         landmark_name = request_data.get('landmark_name', '')
@@ -233,13 +277,11 @@ def get_text():
 
         return jsonify(retrieval_result)
     except Exception as e:
-        print(f"error in get_text: {e}")
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
 @app.route('/api/generate-answer', methods=['POST'])
 def handle_answer_generation_request():
-    """Generate an AI answer to a question about a landmark."""
     try:
         request_data = request.get_json()
         landmark_name = request_data.get('landmark_name', '')
@@ -286,13 +328,11 @@ def handle_answer_generation_request():
             'source': 'Ollama LLM',
         })
     except Exception as error:
-        print(f"Error in handle_answer_generation_request: {error}")
         return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
 @app.route('/api/statistics', methods=['GET'])
 def retrieve_platform_statistics():
-    """Retrieve aggregate statistics about platform usage."""
     try:
         database_connection = db.get_database_connection()
         database_cursor = database_connection.cursor()
@@ -315,13 +355,11 @@ def retrieve_platform_statistics():
             'total_answers': total_answers_count,
         })
     except Exception as error:
-        print(f"Error retrieving statistics: {error}")
         return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
 @app.route('/api/evaluation', methods=['GET'])
 def retrieve_evaluation_results():
-    """Retrieve evaluation test results from the database."""
     try:
         test_name = request.args.get('test_name')
         evaluation_results = db.retrieve_evaluation_results(test_name)
@@ -331,13 +369,11 @@ def retrieve_evaluation_results():
             'count': len(evaluation_results),
         })
     except Exception as error:
-        print(f"Error retrieving evaluation results: {error}")
         return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
 @app.route('/api/fetch-wikipedia', methods=['POST'])
 def fetch_wiki_by_wikidata():
-    """Fetch Wikipedia article from Wikidata ID."""
     try:
         request_data = request.get_json() or {}
         wikidata_id = request_data.get('wikidata_id')
@@ -387,13 +423,11 @@ def fetch_wiki_by_wikidata():
             return jsonify({'status': 'no_data', 'error': 'Failed to fetch Wikipedia'}), 200
             
     except Exception as error:
-        print(f"Error fetching Wikipedia: {error}")
         return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
 @app.route('/api/summarize-wiki', methods=['POST'])
 def summarize_wikipedia_text():
-    """Summarize Wikipedia text using Mistral 7B (under 40 words / 2 sentences)."""
     try:
         request_data = request.get_json() or {}
         wikipedia_text = request_data.get('wikipedia_text', '')
@@ -425,7 +459,6 @@ SUMMARY:"""
         
         llm_data = llm_response.json()
         summary_text = llm_data.get('response', '').strip()
-        
         if not summary_text:
             return jsonify({'status': 'error', 'error': 'LLM returned empty response'}), 500
         
@@ -435,29 +468,56 @@ SUMMARY:"""
             'model': 'mistral',
             'word_count': len(summary_text.split())
         })
-        
     except requests.exceptions.Timeout:
         return jsonify({'status': 'error', 'error': 'LLM timeout - Mistral might be offline'}), 500
     except Exception as error:
-        print(f"Error summarizing Wikipedia: {error}")
+        return jsonify({'status': 'error', 'error': str(error)}), 500
+
+
+@app.route('/api/ask-ai-unconstrained', methods=['POST'])
+def ask_github_ai_unconstrained():
+    try:
+        request_data = request.get_json() or {}
+        landmark_name = request_data.get('landmark_name', 'this location')
+        context_type = request_data.get('context_type', 'landmark')  # 'landmark' or 'question'
+        user_question = request_data.get('question', '')
+        landmark_metadata = request_data.get('metadata', {})
+        
+        if context_type == 'landmark':
+            # User is asking about the landmark in general
+            prompt = f"""Tell me about the history and significance of {landmark_name}. What should visitors know about this place? Provide interesting historical facts, cultural significance, and notable events associated with it."""
+        else:
+            # User is asking a specific question about a landmark
+            metadata_text = ', '.join([f"{k}: {v}" for k, v in landmark_metadata.items()])
+            prompt = f"""Question about {landmark_name} ({metadata_text}):
+
+{user_question}
+
+Please provide a detailed, informative answer based on your knowledge. This response is meant as supplementary information and may not be independently fact-checked."""
+        
+        result = call_github_ai_unconstrained(prompt, temperature=0.7)
+        
+        return jsonify({
+            'status': result.get('status'),
+            'answer': result.get('answer'),
+            'error': result.get('error'),
+            'source': 'GitHub Copilot (Unrestricted AI)',
+            'disclaimer': 'This response was generated by AI without fact checking limitations and hallucination prevention . It may contain inaccuracies. Please verify information by researching other reliable sources.'
+        })
+        
+    except Exception as error:
         return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
 @app.errorhandler(404)
 def handle_not_found_error(error):
-    """Handle requests to non-existent endpoints."""
     return jsonify({'status': 'error', 'error': 'Not found'}), 404
 
 
 @app.errorhandler(500)
 def handle_internal_server_error(error):
-    """Handle internal server errors."""
     return jsonify({'status': 'error', 'error': 'Server error'}), 500
 
 
 if __name__ == '__main__':
-    print("Starting backend...")
-    print(f"Ollama API: {OLLAMA_API}")
-    print(f"Model: {OLLAMA_MODEL}")
-    print("Make sure Ollama is running (ollama serve)")
     app.run(debug=True, host='0.0.0.0', port=5000)

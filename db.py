@@ -1,8 +1,3 @@
-"""
-Database module for the Interactive History Platform.
-Handles all database operations for storing landmarks, historical texts, AI-generated answers, and evaluation metrics.
-"""
-
 import sqlite3
 import json
 from datetime import datetime
@@ -10,23 +5,18 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / 'cache.db'
 
-
 class Database:
-    """A wrapper class for database operations that manages the SQLite connection and queries."""
 
     def __init__(self, path=None):
-        """Initialize the database with an optional custom path."""
         self.path = path or str(DB_PATH)
         self.initialize_database_tables()
 
     def get_database_connection(self):
-        """Create and return a new database connection."""
         database_connection = sqlite3.connect(self.path)
         database_connection.row_factory = sqlite3.Row
         return database_connection
 
     def initialize_database_tables(self):
-        """Create all required database tables if they don't already exist."""
         database_connection = self.get_database_connection()
         database_cursor = database_connection.cursor()
 
@@ -99,7 +89,6 @@ class Database:
         database_connection.close()
 
     def save_landmark_to_database(self, landmark_data):
-        """Save or update a landmark in the database."""
         database_connection = self.get_database_connection()
         database_cursor = database_connection.cursor()
         try:
@@ -122,13 +111,11 @@ class Database:
             database_connection.commit()
             return True
         except Exception as error:
-            print(f"Error saving landmark to database: {error}")
             return False
         finally:
             database_connection.close()
 
     def retrieve_landmark_by_id(self, landmark_id):
-        """Retrieve a landmark by its ID."""
         database_connection = self.get_database_connection()
         database_cursor = database_connection.cursor()
         try:
@@ -229,7 +216,6 @@ class Database:
             database_connection.close()
 
     def save_evaluation_results(self, test_name, results_data):
-        """Save evaluation test results to the database."""
         database_connection = self.get_database_connection()
         database_cursor = database_connection.cursor()
         try:
