@@ -16,6 +16,107 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: #f5f5f5;
             color: #333;
+            font-size: 16px;
+        }
+
+        body.intro-active {
+            overflow: hidden;
+        }
+
+        .intro-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 3000;
+            background: linear-gradient(150deg, #1b2252 0%, #31408f 48%, #87a5ff 100%);
+            color: #f7f9ff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .intro-card {
+            width: min(940px, 100%);
+            background: rgba(11, 16, 48, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            box-shadow: 0 24px 50px rgba(0, 0, 0, 0.35);
+            padding: 28px;
+            backdrop-filter: blur(3px);
+        }
+
+        .intro-eyebrow {
+            font-size: 0.84em;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #cad3ff;
+            margin-bottom: 8px;
+        }
+
+        .intro-title {
+            font-size: clamp(1.7rem, 3.8vw, 2.65rem);
+            line-height: 1.15;
+            margin-bottom: 10px;
+        }
+
+        .intro-subtitle {
+            color: #e2e8ff;
+            line-height: 1.55;
+            margin-bottom: 20px;
+            max-width: 70ch;
+        }
+
+        .intro-steps {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(220px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .intro-step {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .intro-step-num {
+            font-size: 0.82em;
+            font-weight: 700;
+            color: #b9c5ff;
+            margin-bottom: 4px;
+        }
+
+        .intro-step-text {
+            font-size: 0.98em;
+            line-height: 1.42;
+        }
+
+        .intro-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .intro-start-btn {
+            padding: 11px 18px;
+            border-radius: 8px;
+            border: none;
+            background: #f8fbff;
+            color: #23327c;
+            font-size: 1em;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .intro-start-btn:hover {
+            background: #dfe9ff;
+        }
+
+        .intro-note {
+            color: #d7deff;
+            font-size: 0.9em;
         }
 
         .container {
@@ -76,6 +177,8 @@
             display: flex;
             flex: 1;
             overflow: hidden;
+            position: relative;
+            --sidebar-width: clamp(420px, 46vw, 620px);
         }
 
         #map {
@@ -84,12 +187,50 @@
         }
 
         .sidebar {
-            width: 400px;
+            width: var(--sidebar-width);
             background: white;
             border-left: 1px solid #ddd;
             display: flex;
             flex-direction: column;
             box-shadow: -2px 0 8px rgba(0, 0, 0, 0.05);
+            transition: width 0.28s ease, min-width 0.28s ease, opacity 0.2s ease;
+            min-width: 360px;
+            overflow: hidden;
+        }
+
+        .main.sidebar-collapsed .sidebar {
+            width: 0;
+            min-width: 0;
+            border-left: none;
+            box-shadow: none;
+            opacity: 0;
+        }
+
+        .sidebar-toggle {
+            position: absolute;
+            top: 14px;
+            right: calc(var(--sidebar-width) - 16px);
+            width: 34px;
+            height: 34px;
+            border-radius: 999px;
+            border: 1px solid #d0d4f3;
+            background: #ffffff;
+            color: #4754b8;
+            font-size: 19px;
+            font-weight: 700;
+            line-height: 1;
+            z-index: 1100;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+            transition: right 0.28s ease, background 0.2s ease;
+            padding: 0;
+        }
+
+        .sidebar-toggle:hover {
+            background: #eef1ff;
+        }
+
+        .main.sidebar-collapsed .sidebar-toggle {
+            right: 8px;
         }
 
         .sidebar-header {
@@ -97,6 +238,7 @@
             padding: 15px;
             border-bottom: 1px solid #ddd;
             font-weight: bold;
+            font-size: 1.08em;
         }
 
         .sidebar-content {
@@ -164,15 +306,16 @@
         .landmark-item-name {
             font-weight: bold;
             margin-bottom: 4px;
+            font-size: 1.04em;
         }
 
         .landmark-item-type {
-            font-size: 0.85em;
+            font-size: 0.93em;
             color: #666;
         }
 
         .landmark-item-dist {
-            font-size: 0.8em;
+            font-size: 0.9em;
             color: #999;
             margin-top: 4px;
         }
@@ -191,7 +334,7 @@
         }
 
         .panel-section h3 {
-            font-size: 0.95em;
+            font-size: 1.02em;
             margin-bottom: 8px;
             color: #667eea;
         }
@@ -200,7 +343,7 @@
             display: flex;
             justify-content: space-between;
             padding: 4px 0;
-            font-size: 0.9em;
+            font-size: 0.98em;
         }
 
         .metadata-row-label {
@@ -217,7 +360,7 @@
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 4px;
-            font-size: 0.85em;
+            font-size: 0.95em;
         }
 
         .tag {
@@ -237,14 +380,14 @@
             padding: 10px;
             border-radius: 3px;
             border: 1px solid #ddd;
-            font-size: 0.9em;
-            line-height: 1.4;
+            font-size: 0.98em;
+            line-height: 1.55;
             max-height: 150px;
             overflow-y: auto;
         }
 
         .context-status {
-            font-size: 0.85em;
+            font-size: 0.95em;
             color: #666;
             font-style: italic;
         }
@@ -279,7 +422,7 @@
             padding: 8px;
             border: 1px solid #ddd;
             border-radius: 4px;
-            font-size: 0.9em;
+            font-size: 1em;
             margin-bottom: 8px;
         }
 
@@ -288,7 +431,7 @@
             padding: 8px;
             border: 1px solid #ddd;
             border-radius: 4px;
-            font-size: 0.9em;
+            font-size: 1em;
             margin-bottom: 8px;
         }
 
@@ -297,12 +440,12 @@
             padding: 10px;
             border-left: 3px solid #667eea;
             border-radius: 3px;
-            font-size: 0.9em;
+            font-size: 1em;
             line-height: 1.5;
         }
 
         .answer-source {
-            font-size: 0.85em;
+            font-size: 0.93em;
             color: #666;
             margin-top: 8px;
         }
@@ -323,7 +466,7 @@
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 0.9em;
+            font-size: 0.95em;
             transition: background 0.3s;
         }
 
@@ -400,6 +543,37 @@
             color: #000;
         }
 
+        .cached-regions-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .cached-region-item {
+            background: #f8f9fa;
+            border: 1px solid #dfe4f1;
+            border-left: 4px solid #ef476f;
+            border-radius: 6px;
+            padding: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .cached-region-item:hover {
+            background: #ffeef2;
+            transform: translateX(3px);
+        }
+
+        .cached-region-name {
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .cached-region-meta {
+            font-size: 0.88em;
+            color: #575f73;
+        }
+
         .export-btn {
             width: 100%;
             margin-top: 10px;
@@ -407,11 +581,24 @@
 
         @media (max-width: 1024px) {
             .sidebar {
-                width: 350px;
+                width: clamp(360px, 44vw, 500px);
+                min-width: 320px;
+            }
+
+            .main {
+                --sidebar-width: clamp(360px, 44vw, 500px);
             }
         }
 
         @media (max-width: 768px) {
+            .intro-card {
+                padding: 20px;
+            }
+
+            .intro-steps {
+                grid-template-columns: 1fr;
+            }
+
             .main {
                 flex-direction: column;
             }
@@ -434,6 +621,10 @@
             .toolbar input {
                 flex: 1;
             }
+
+            .sidebar-toggle {
+                display: none;
+            }
         }
 
         .history-marker {
@@ -445,10 +636,56 @@
             justify-content: center;
             filter: drop-shadow(0 1px 3px rgba(0,0,0,0.3));
         }
+
+        .selected-marker {
+            background: none !important;
+            border: none !important;
+            font-size: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            filter: drop-shadow(0 4px 8px rgba(0,0,0,0.4));
+            transform: translateY(-2px);
+        }
     </style>
 </head>
 
-<body>
+<body class="intro-active">
+
+<div id="introOverlay" class="intro-overlay" role="dialog" aria-modal="true" aria-label="Application introduction">
+    <div class="intro-card">
+        <div class="intro-eyebrow">Welcome</div>
+        <h2 class="intro-title">Interactive History Explorer</h2>
+        <p class="intro-subtitle">
+            Explore nearby historical places, ask concise contextual questions, and keep cached regions ready when APIs are unstable.
+            Press Start to launch the app.
+        </p>
+
+        <div class="intro-steps">
+            <div class="intro-step">
+                <div class="intro-step-num">Step 1</div>
+                <div class="intro-step-text">Click on the map or search a place to load nearby landmarks.</div>
+            </div>
+            <div class="intro-step">
+                <div class="intro-step-num">Step 2</div>
+                <div class="intro-step-text">Open landmark details to read tags and available history text.</div>
+            </div>
+            <div class="intro-step">
+                <div class="intro-step-num">Step 3</div>
+                <div class="intro-step-text">Use the RAG tab to ask short questions, optionally with a year.</div>
+            </div>
+            <div class="intro-step">
+                <div class="intro-step-num">Step 4</div>
+                <div class="intro-step-text">Use Cache Region, then open the Cached tab to reload saved areas and see their radius circle.</div>
+            </div>
+        </div>
+
+        <div class="intro-actions">
+            <button id="startAppBtn" class="intro-start-btn">Start Exploring</button>
+            <span class="intro-note">Tip: cached areas are highlighted with a red translucent radius.</span>
+        </div>
+    </div>
+</div>
 
 <div class="container">
     <header>
@@ -461,11 +698,15 @@
             />
             <button id="gpsBtn" title="Center on your location">GPS</button>
             <button id="resetBtn" title="Reset to default view">Reset</button>
+            <button id="cacheBtn" title="Save current region landmarks for offline use">Cache Region</button>
+            <button id="showCachedBtn" title="Load landmarks from local cache">Show Cached</button>
         </div>
     </header>
 
     <div class="main">
         <div id="map"></div>
+
+        <button id="sidebarToggle" class="sidebar-toggle" aria-label="Hide sidebar" title="Hide sidebar"><</button>
 
         <div class="sidebar">
             <div class="sidebar-header">
@@ -476,6 +717,7 @@
                 <div class="sidebar-tab active" data-tab="results">Results</div>
                 <div class="sidebar-tab" data-tab="details">Details</div>
                 <div class="sidebar-tab" data-tab="rag">RAG</div>
+                <div class="sidebar-tab" data-tab="cached">Cached</div>
             </div>
 
             <div class="sidebar-content">
@@ -505,6 +747,16 @@
                         <div class="empty-state">
                             <div class="empty-state-icon"></div>
                             <p>Select a landmark to explore RAG workflow.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cached tab -->
+                <div id="cached-tab" class="tab-content">
+                    <div id="cachedRegionsList" class="cached-regions-list">
+                        <div class="empty-state">
+                            <div class="empty-state-icon"></div>
+                            <p>No cached regions yet. Use Cache Region first.</p>
                         </div>
                     </div>
                 </div>

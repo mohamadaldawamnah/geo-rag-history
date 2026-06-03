@@ -85,6 +85,19 @@ class Database:
             )
         ''')
 
+        database_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS cached_regions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                center_lat REAL NOT NULL,
+                center_lon REAL NOT NULL,
+                radius_m INTEGER NOT NULL,
+                landmark_count INTEGER DEFAULT 0,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(name, center_lat, center_lon, radius_m)
+            )
+        ''')
+
         database_connection.commit()
         database_connection.close()
 
@@ -271,10 +284,50 @@ class Database:
         database_connection = self.get_database_connection()
         database_cursor = database_connection.cursor()
         try:
+            database_cursor.execute('DELETE FROM cached_regions')
             database_cursor.execute('DELETE FROM evaluation_metrics')
             database_cursor.execute('DELETE FROM generated_answers')
             database_cursor.execute('DELETE FROM historical_texts')
             database_cursor.execute('DELETE FROM landmarks')
             database_connection.commit()
+        finally:
+            database_connection.close()
+
+    def save_cached_region(self, name, center_lat, center_lon, radius_m, landmark_count=0):
+        """Save or update cached region metadata."""
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
+        try:
+            rounded_lat = round(float(center_lat), 4)
+            rounded_lon = round(float(center_lon), 4)
+            database_cursor.execute('''
+                INSERT INTO cached_regions
+                (name, center_lat, center_lon, radius_m, landmark_count, cached_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(name, center_lat, center_lon, radius_m)
+                DO UPDATE SET
+                    landmark_count = excluded.landmark_count,
+                    cached_at = CURRENT_TIMESTAMP
+            ''', (name, rounded_lat, rounded_lon, int(radius_m), int(landmark_count)))
+            database_connection.commit()
+            return True
+        except Exception as error:
+            print(f"Error saving cached region: {error}")
+            return False
+        finally:
+            database_connection.close()
+
+    def retrieve_cached_regions(self, limit=100):
+        """Retrieve cached regions ordered by most recent."""
+        database_connection = self.get_database_connection()
+        database_cursor = database_connection.cursor()
+        try:
+            database_cursor.execute('''
+                SELECT * FROM cached_regions
+                ORDER BY cached_at DESC
+                LIMIT ?
+            ''', (int(limit),))
+            retrieved_rows = database_cursor.fetchall()
+            return [dict(row) for row in retrieved_rows] if retrieved_rows else []
         finally:
             database_connection.close()

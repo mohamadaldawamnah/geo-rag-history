@@ -3,7 +3,7 @@ const CONFIG = {
     DEFAULT_LAT: 51.8985,
     DEFAULT_LON: -8.4756,
     DEFAULT_ZOOM: 14,
-    SEARCH_RADIUS: 800,
+    SEARCH_RADIUS: 400,
     OVERPASS_URL: 'https://overpass-api.de/api/interpreter',
     NOMINATIM_URL: 'https://nominatim.openstreetmap.org/search',
 };
@@ -12,9 +12,13 @@ let state = {
     selected: null,
     markers: [],
     selectedMarker: null,
+    cachedRegionCircle: null,
+    cachedRegions: [],
     cachedTexts: {},
     cachedAnswers: {},
     isLoading: false,
+    activeQueryId: 0,
+    lastSearchName: null,
 };
 
 let map = L.map('map').setView([CONFIG.DEFAULT_LAT, CONFIG.DEFAULT_LON], CONFIG.DEFAULT_ZOOM);
@@ -80,6 +84,24 @@ function clear_all() {
     state.selected = null;
 }
 
+function clear_cached_region_circle() {
+    if (state.cachedRegionCircle) {
+        map.removeLayer(state.cachedRegionCircle);
+        state.cachedRegionCircle = null;
+    }
+}
+
+function highlight_cached_region(lat, lon, radiusMeters) {
+    clear_cached_region_circle();
+    state.cachedRegionCircle = L.circle([lat, lon], {
+        radius: radiusMeters,
+        color: '#d62839',
+        weight: 2,
+        fillColor: '#ef233c',
+        fillOpacity: 0.2,
+    }).addTo(map);
+}
+
 async function get_overpass_data(lat, lon, rad = CONFIG.SEARCH_RADIUS) {
     const q = `[out:json];(node["historic"](around:${rad},${lat},${lon});way["historic"](around:${rad},${lat},${lon});relation["historic"](around:${rad},${lat},${lon});node["tourism"="attraction"](around:${rad},${lat},${lon});way["tourism"="attraction"](around:${rad},${lat},${lon});relation["tourism"="attraction"](around:${rad},${lat},${lon});node["amenity"="place_of_worship"](around:${rad},${lat},${lon});way["amenity"="place_of_worship"](around:${rad},${lat},${lon});relation["amenity"="place_of_worship"](around:${rad},${lat},${lon}););out tags center;`;
     
@@ -93,9 +115,52 @@ async function get_overpass_data(lat, lon, rad = CONFIG.SEARCH_RADIUS) {
         const data = await resp.json();
         return data.elements || [];
     } catch (err) {
-        show_toast('Failed to query Overpass API', 'error');
-        return [];
+        throw err;
     }
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function show_offline_results_message() {
+    document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>You are offline. Reconnect to query live landmarks.</p></div>`;
+}
+
+async function get_overpass_data_with_retry(lat, lon, queryId, rad = CONFIG.SEARCH_RADIUS) {
+    let attempt = 0;
+
+    if (!navigator.onLine) {
+        show_offline_results_message();
+        show_toast('You are offline. Live search is paused.', 'error');
+        return null;
+    }
+
+    while (queryId === state.activeQueryId) {
+        if (!navigator.onLine) {
+            show_offline_results_message();
+            show_toast('You are offline. Live search is paused.', 'error');
+            return null;
+        }
+
+        attempt += 1;
+        try {
+            if (attempt > 1) {
+                show_toast(`Retrying Overpass... attempt ${attempt}`, 'info');
+            }
+            return await get_overpass_data(lat, lon, rad);
+        } catch (err) {
+            if (queryId !== state.activeQueryId) {
+                break;
+            }
+
+            const message = err?.message || 'Overpass request failed';
+            show_toast(`${message}. Retrying...`, 'error');
+            await sleep(2000);
+        }
+    }
+
+    return [];
 }
 
 function build_landmarks(els, refLat, refLon) {
@@ -147,9 +212,9 @@ function create_selected_marker(lat, lon) {
     const selectedIcon = L.divIcon({
         html: '📍',
         className: 'selected-marker',
-        iconSize: [50, 50],
-        iconAnchor: [25, 50],
-        popupAnchor: [0, -50]
+        iconSize: [76, 76],
+        iconAnchor: [38, 76],
+        popupAnchor: [0, -76]
     });
     
     return L.marker([lat, lon], { icon: selectedIcon });
@@ -197,7 +262,6 @@ async function fetch_wikipedia_and_summarize(landmark) {
     }
 
     try {
-        // Get Wikipedia article via Wikidata ID
         const wikiRes = await fetch(`${CONFIG.API_BASE_URL}/api/fetch-wikipedia`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -274,6 +338,16 @@ async function generate_ans(landmark, q, yr = null) {
     }
 }
 
+function parse_optional_year(rawValue) {
+    const normalized = String(rawValue ?? '').trim();
+    if (!normalized) return null;
+
+    const parsed = Number.parseInt(normalized, 10);
+    if (!Number.isFinite(parsed)) return null;
+    if (parsed < 1000 || parsed > 2100) return null;
+    return parsed;
+}
+
 function render_list() {
     const list = document.getElementById('resultsList');
     
@@ -290,7 +364,7 @@ function render_list() {
         </div>
     `).join('');
 
-    // Scroll selected item into view
+    
     if (state.selected) {
         const selectedElement = list.querySelector('.landmark-item.selected');
         if (selectedElement) {
@@ -331,6 +405,9 @@ async function render_details(lm) {
     const status = document.getElementById('contextStatus');
     const ctx = document.getElementById('contextText');
 
+    
+    show_github_ai_button('details', lm);
+
     if (txt.status === 'success' && txt.text) {
         const badge = txt.isAutoGenerated ? 'auto-generated' : 'ok';
         const badgeText = txt.isAutoGenerated ? '🤖 Auto-Generated from Wikipedia' : 'Got it';
@@ -339,10 +416,8 @@ async function render_details(lm) {
         ctx.style.display = 'block';
     } else if (txt.status === 'no_data') {
         status.innerHTML = `<span class="status-badge warning">No text</span>`;
-        show_github_ai_button('details', lm);
     } else {
         status.innerHTML = `<span class="status-badge error">Error: ${txt.error || 'unknown'}</span>`;
-        show_github_ai_button('details', lm);
     }
 }
 
@@ -383,7 +458,8 @@ function build_prompt(lm, txt, q = null, yr = null) {
 2. Do NOT make up, invent, or infer any information
 3. If the requested year is NOT mentioned in the context, respond: "No information for that time period in the source material"
 4. If the question cannot be answered from the context, say so explicitly
-5. Never generate plausible-sounding but fabricated history`;
+5. Never generate plausible-sounding but fabricated history
+6. Provide all relevant details from the context without shortening.`;
     const meta = Object.entries(lm.tags).map(([k, v]) => `${k}: ${v}`).join('\n');
     const context = txt.status === 'success' && txt.text ? txt.text : '[no text available]';
     let promptText = `SYSTEM INSTRUCTIONS:\n${sys}\n\nLANDMARK:\nName: ${lm.name}\nType: ${lm.osmType}\nCoords: ${lm.lat.toFixed(4)}, ${lm.lon.toFixed(4)}\n\nTAGS:\n${meta}\n\nHISTORICAL CONTEXT:\n${context}`;
@@ -401,7 +477,8 @@ async function gen_answer(event) {
     if (!state.selected) return;
 
     const q = document.getElementById('questionInput')?.value || '';
-    const yr = document.getElementById('yearInput')?.value || null;
+    const yrInput = document.getElementById('yearInput')?.value;
+    const yr = parse_optional_year(yrInput);
 
     if (!q) {
         show_toast('Enter a question', 'error');
@@ -413,26 +490,22 @@ async function gen_answer(event) {
     btn.textContent = 'Thinking...';
 
     try {
-        const ans = await generate_ans(state.selected, q, yr ? parseInt(yr) : null);
+        const ans = await generate_ans(state.selected, q, yr);
         const sec = document.getElementById('answerSection');
 
         if (ans.status === 'success' && ans.answer) {
             document.getElementById('answerText').textContent = ans.answer;
             document.getElementById('answerSource').innerHTML = `<strong>Source:</strong> Wikipedia (extracted via local LLM)`;
             sec.style.display = 'block';
-            
-            // Show GitHub AI button if answer is insufficient (very short)
-            const wordCount = ans.answer.split(/\s+/).length;
-            if (wordCount < 20) {
-                show_github_ai_button('rag', state.selected, q, yr ? parseInt(yr) : null);
-            }
+
+            show_github_ai_button('rag', state.selected, q, yr);
             
             show_toast('Done!', 'success');
         } else {
             document.getElementById('answerText').textContent = `Error: ${ans.error || 'failed'}`;
             sec.style.display = 'block';
             
-            show_github_ai_button('rag', state.selected, q, yr ? parseInt(yr) : null);
+            show_github_ai_button('rag', state.selected, q, yr);
             show_toast('Failed to generate, but you can try asking AI', 'error');
         }
     } finally {
@@ -586,6 +659,7 @@ async function search_place(name) {
         const res = data[0];
         const lat = parseFloat(res.lat);
         const lon = parseFloat(res.lon);
+        state.lastSearchName = (name || '').trim() || null;
 
         map.flyTo([lat, lon], 14);
         query_landmarks(lat, lon);
@@ -596,10 +670,28 @@ async function search_place(name) {
 }
 
 async function query_landmarks(lat, lon) {
+    state.activeQueryId += 1;
+    const queryId = state.activeQueryId;
+
     clear_all();
+
+    if (!navigator.onLine) {
+        show_offline_results_message();
+        show_toast('You are offline. Reconnect and try again.', 'error');
+        return;
+    }
+
     document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="loading-spinner"></div><p>Querying Overpass...</p></div>`;
 
-    const els = await get_overpass_data(lat, lon);
+    const els = await get_overpass_data_with_retry(lat, lon, queryId);
+    if (queryId !== state.activeQueryId) {
+        return;
+    }
+
+    if (els === null) {
+        return;
+    }
+
     state.landmarks = build_landmarks(els, lat, lon);
 
     if (state.landmarks.length === 0) {
@@ -615,6 +707,154 @@ async function query_landmarks(lat, lon) {
 
     render_list();
     show_toast(`Found ${state.landmarks.length} landmarks`, 'success');
+}
+
+async function cache_current_region() {
+    try {
+        let landmarks_to_cache = state.landmarks;
+        const center = map.getCenter();
+        const radiusMeters = CONFIG.SEARCH_RADIUS;
+        if (!landmarks_to_cache || landmarks_to_cache.length === 0) {
+            const els = await get_overpass_data(center.lat, center.lng);
+            landmarks_to_cache = build_landmarks(els, center.lat, center.lng);
+        }
+
+        if (!landmarks_to_cache || landmarks_to_cache.length === 0) {
+            show_toast('No landmarks to cache in this region', 'error');
+            return;
+        }
+
+        const inferredRegionName = state.lastSearchName || `Area ${center.lat.toFixed(3)}, ${center.lng.toFixed(3)}`;
+        const resp = await fetch(`${CONFIG.API_BASE_URL}/api/cache-landmarks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                landmarks: landmarks_to_cache,
+                region_name: inferredRegionName,
+                center_lat: center.lat,
+                center_lon: center.lng,
+                radius_m: radiusMeters,
+            }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.status !== 'success') {
+            throw new Error(data.error || `HTTP ${resp.status}`);
+        }
+
+        show_toast(`Cached ${data.saved_count} landmarks for offline use`, 'success');
+        await load_cached_regions();
+    } catch (err) {
+        show_toast(`Cache failed: ${err.message || 'unknown error'}`, 'error');
+    }
+}
+
+function render_cached_regions() {
+    const list = document.getElementById('cachedRegionsList');
+    if (!list) return;
+
+    if (!state.cachedRegions.length) {
+        list.innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>No cached regions yet. Use Cache Region first.</p></div>`;
+        return;
+    }
+
+    list.innerHTML = state.cachedRegions.map((region, index) => {
+        const regionName = html_escape(region.name || 'Cached Area');
+        const radiusText = Number(region.radius_m || 0);
+        const landmarkCount = Number(region.landmark_count || 0);
+        const cachedAt = html_escape(region.cached_at || 'recently');
+        return `
+            <div class="cached-region-item" onclick="open_cached_region(${index})">
+                <div class="cached-region-name">${regionName}</div>
+                <div class="cached-region-meta">Radius: ${radiusText}m • Landmarks: ${landmarkCount}</div>
+                <div class="cached-region-meta">Cached at: ${cachedAt}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function load_cached_regions() {
+    try {
+        const resp = await fetch(`${CONFIG.API_BASE_URL}/api/cached-regions?limit=100`);
+        const data = await resp.json();
+        if (!resp.ok || data.status !== 'success') {
+            throw new Error(data.error || `HTTP ${resp.status}`);
+        }
+
+        state.cachedRegions = Array.isArray(data.regions) ? data.regions : [];
+        render_cached_regions();
+    } catch (err) {
+        const list = document.getElementById('cachedRegionsList');
+        if (list) {
+            list.innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Could not load cached regions.</p></div>`;
+        }
+    }
+}
+
+async function load_cached_landmarks_for_area(lat, lon, radiusMeters) {
+    const radiusKm = Math.max(0.2, radiusMeters / 1000);
+    const resp = await fetch(
+        `${CONFIG.API_BASE_URL}/api/cached-landmarks?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&radius_km=${encodeURIComponent(radiusKm)}`
+    );
+    const data = await resp.json();
+    if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.error || `HTTP ${resp.status}`);
+    }
+
+    clear_all();
+    state.landmarks = Array.isArray(data.landmarks) ? data.landmarks : [];
+
+    if (state.landmarks.length === 0) {
+        document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>No cached landmarks for this region.</p></div>`;
+        return 0;
+    }
+
+    state.landmarks.forEach(lm => {
+        const marker = create_custom_marker(lm.lat, lm.lon).addTo(map);
+        marker.on('click', () => select_landmark(lm.id));
+        state.markers.push(marker);
+    });
+    render_list();
+    return state.landmarks.length;
+}
+
+async function open_cached_region(index) {
+    const region = state.cachedRegions[index];
+    if (!region) return;
+
+    const lat = Number(region.center_lat);
+    const lon = Number(region.center_lon);
+    const radiusMeters = Number(region.radius_m || CONFIG.SEARCH_RADIUS);
+
+    map.flyTo([lat, lon], 14);
+    highlight_cached_region(lat, lon, radiusMeters);
+
+    try {
+        const count = await load_cached_landmarks_for_area(lat, lon, radiusMeters);
+        show_toast(`Loaded ${count} cached landmarks from ${region.name}`, 'success');
+    } catch (err) {
+        show_toast(`Load cached failed: ${err.message || 'unknown error'}`, 'error');
+    }
+
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector('[data-tab="results"]').classList.add('active');
+    document.getElementById('results-tab').classList.add('active');
+}
+
+async function show_cached_region() {
+    try {
+        const center = map.getCenter();
+        const loadedCount = await load_cached_landmarks_for_area(center.lat, center.lng, CONFIG.SEARCH_RADIUS);
+        highlight_cached_region(center.lat, center.lng, CONFIG.SEARCH_RADIUS);
+        if (loadedCount === 0) {
+            show_toast('No cached landmarks nearby', 'error');
+            return;
+        }
+
+        show_toast(`Loaded ${loadedCount} cached landmarks`, 'success');
+    } catch (err) {
+        show_toast(`Load cached failed: ${err.message || 'unknown error'}`, 'error');
+    }
 }
 
 
@@ -641,11 +881,38 @@ function locate_me() {
 
 function reset_map() {
     clear_all();
+    clear_cached_region_circle();
     document.getElementById('resultsList').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Click the map to find landmarks.</p></div>`;
     document.getElementById('detailsPanel').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Select a landmark.</p></div>`;
     document.getElementById('ragPanel').innerHTML = `<div class="empty-state"><div class="empty-state-icon"></div><p>Select a landmark.</p></div>`;
     map.flyTo([CONFIG.DEFAULT_LAT, CONFIG.DEFAULT_LON], CONFIG.DEFAULT_ZOOM);
     show_toast('Reset', 'success');
+}
+
+function close_intro_overlay() {
+    const overlay = document.getElementById('introOverlay');
+    if (!overlay) return;
+
+    overlay.style.display = 'none';
+    document.body.classList.remove('intro-active');
+    setTimeout(() => {
+        map.invalidateSize();
+    }, 80);
+}
+
+function toggle_sidebar() {
+    const main = document.querySelector('.main');
+    const toggle = document.getElementById('sidebarToggle');
+    if (!main || !toggle) return;
+
+    const isCollapsed = main.classList.toggle('sidebar-collapsed');
+    toggle.textContent = isCollapsed ? '>' : '<';
+    toggle.title = isCollapsed ? 'Show sidebar' : 'Hide sidebar';
+    toggle.setAttribute('aria-label', isCollapsed ? 'Show sidebar' : 'Hide sidebar');
+
+    setTimeout(() => {
+        map.invalidateSize();
+    }, 320);
 }
 
 document.getElementById('searchInput').addEventListener('keypress', (e) => {
@@ -654,7 +921,18 @@ document.getElementById('searchInput').addEventListener('keypress', (e) => {
 
 document.getElementById('gpsBtn').addEventListener('click', locate_me);
 document.getElementById('resetBtn').addEventListener('click', reset_map);
+document.getElementById('cacheBtn').addEventListener('click', cache_current_region);
+document.getElementById('showCachedBtn').addEventListener('click', show_cached_region);
+document.getElementById('sidebarToggle').addEventListener('click', toggle_sidebar);
+if (document.getElementById('startAppBtn')) {
+    document.getElementById('startAppBtn').addEventListener('click', close_intro_overlay);
+}
+
+load_cached_regions();
 
 map.on('click', (e) => {
+    clear_cached_region_circle();
     query_landmarks(e.latlng.lat, e.latlng.lng);
 });
+
+window.open_cached_region = open_cached_region;

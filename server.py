@@ -3,7 +3,7 @@ from flask_cors import CORS
 import requests
 import json
 import re
-import os
+from urllib.parse import unquote, urlparse
 from db import Database
 
 app = Flask(__name__)
@@ -11,24 +11,24 @@ CORS(app)
 db = Database()
 
 OLLAMA_API = 'http://localhost:11434/api/generate'
-OLLAMA_MODEL = 'llama2'
+OLLAMA_MODEL = 'mistral'
 WIKI_API = 'https://en.wikipedia.org/w/api.php'
 WIKIDATA_API = 'https://www.wikidata.org/w/api.php'
-GITHUB_TOKEN = os.getenv('GITHUB_TOKEN', '')
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
 HEADERS = {
     'User-Agent': 'HistoryPlatform/1.0 (Educational Research) +https://github.com'
 }
 
 
-def fetch_wikipedia_text(article_title, max_text_length=2000):
+def fetch_wikipedia_text(article_title):
     try:
         query_parameters = {
             'action': 'query',
             'format': 'json',
             'titles': article_title,
             'prop': 'extracts|pageimages',
-            'exintro': 1,
+            'explaintext': 1,
             'redirects': 1,
         }
         
@@ -47,7 +47,6 @@ def fetch_wikipedia_text(article_title, max_text_length=2000):
             return None
 
         article_extract = re.sub(r'<[^>]+>', '', article_extract)
-        article_extract = article_extract[:max_text_length]
         page_id = page.get('pageid')
         wikipedia_url = f'https://en.wikipedia.org/?curid={page_id}' if page_id else None
 
@@ -61,7 +60,7 @@ def fetch_wikipedia_text(article_title, max_text_length=2000):
         return {'status': 'error', 'error': str(error)}
 
 
-def fetch_wikidata_text(wikidata_entity_id, max_text_length=2000):
+def fetch_wikidata_text(wikidata_entity_id):
     try:
         query_parameters = {
             'action': 'wbgetentities',
@@ -86,7 +85,7 @@ def fetch_wikidata_text(wikidata_entity_id, max_text_length=2000):
 
         entity_label = entity.get('labels', {}).get('en', {}).get('value', 'Unknown')
         wikidata_url = f'https://www.wikidata.org/wiki/{wikidata_entity_id}'
-        combined_text = f"{entity_label}: {entity_description}"[:max_text_length]
+        combined_text = f"{entity_label}: {entity_description}"
 
         return {
             'text': combined_text,
@@ -99,23 +98,31 @@ def fetch_wikidata_text(wikidata_entity_id, max_text_length=2000):
 
 
 def retrieve_historical_text_from_multiple_sources(landmark_name, wikidata_entity_id=None, wikipedia_url=None):
+    def extract_wikipedia_title(raw_value):
+        value = (raw_value or '').strip()
+        if not value:
+            return None
+
+        if value.startswith('http://') or value.startswith('https://'):
+            parsed = urlparse(value)
+            if parsed.path.startswith('/wiki/'):
+                return unquote(parsed.path.replace('/wiki/', '', 1)).replace('_', ' ')
+            return None
+
+        if ':' in value:
+            value = value.split(':', 1)[1]
+
+        return unquote(value).replace('_', ' ')
+
     if wikipedia_url:
         try:
-            if ':' in wikipedia_url:
-                article_title = wikipedia_url.split(':')[-1].replace('_', ' ')
-            else:
-                article_title = wikipedia_url.replace('_', ' ')
-            
-            result = fetch_wikipedia_text(article_title)
-            if result and result.get('status') == 'success':
-                return result
+            article_title = extract_wikipedia_title(wikipedia_url)
+            if article_title:
+                result = fetch_wikipedia_text(article_title)
+                if result and result.get('status') == 'success':
+                    return result
         except Exception as error:
             pass
-
-    if wikidata_entity_id:
-        result = fetch_wikidata_text(wikidata_entity_id)
-        if result and result.get('status') == 'success':
-            return result
 
     try:
         result = fetch_wikipedia_text(landmark_name)
@@ -123,6 +130,11 @@ def retrieve_historical_text_from_multiple_sources(landmark_name, wikidata_entit
             return result
     except Exception as error:
         pass
+
+    if wikidata_entity_id:
+        result = fetch_wikidata_text(wikidata_entity_id)
+        if result and result.get('status') == 'success':
+            return result
 
     return {'status': 'no_data', 'text': None, 'error': 'No text found'}
 
@@ -136,7 +148,7 @@ def call_ollama_language_model(user_prompt, temperature=0.3):
             'stream': False,
         }
         
-        response = requests.post(OLLAMA_API, json=request_payload, timeout=60)
+        response = requests.post(OLLAMA_API, json=request_payload, timeout=360)
         response.raise_for_status()
         response_data = response.json()
         
@@ -201,7 +213,8 @@ def build_rag_system_prompt(landmark_name, landmark_metadata, historical_context
 2. Do NOT invent, infer, or generate plausible-sounding but false information
 3. If the requested year is NOT mentioned in the context, respond: "No information for that time period in the source material"
 4. If the question cannot be answered from the context, explicitly say so
-5. Your answer must be grounded in the provided text - never speculate"""
+5. Your answer must be grounded in the provided text - never speculate
+6. Provide all relevant details found in the context. Do not shorten for brevity."""
     
     metadata_lines = []
     for metadata_key, metadata_value in landmark_metadata.items():
@@ -231,6 +244,56 @@ REQUIREMENT: Extract your answer directly from the provided context. Do not inve
 ANSWER:"""
     
     return complete_prompt
+
+
+def normalize_optional_year(year_value):
+    if year_value is None:
+        return None
+
+    if isinstance(year_value, int):
+        return year_value if 1000 <= year_value <= 2100 else None
+
+    text_value = str(year_value).strip()
+    if not text_value:
+        return None
+
+    try:
+        parsed = int(text_value)
+    except (TypeError, ValueError):
+        return None
+
+    return parsed if 1000 <= parsed <= 2100 else None
+
+
+def normalize_landmark_for_frontend(landmark_row, ref_lat=None, ref_lon=None):
+    tags_value = landmark_row.get('tags')
+    if isinstance(tags_value, str):
+        try:
+            tags_value = json.loads(tags_value)
+        except json.JSONDecodeError:
+            tags_value = {}
+    if not isinstance(tags_value, dict):
+        tags_value = {}
+
+    lat = float(landmark_row.get('lat'))
+    lon = float(landmark_row.get('lon'))
+
+    distance_km = 0.0
+    if ref_lat is not None and ref_lon is not None:
+        distance_km = (((lat - ref_lat) ** 2 + (lon - ref_lon) ** 2) ** 0.5) * 111.0
+
+    return {
+        'id': landmark_row.get('id'),
+        'name': landmark_row.get('name') or '(Unnamed)',
+        'lat': lat,
+        'lon': lon,
+        'distance': distance_km,
+        'osmType': landmark_row.get('osm_type') or 'node',
+        'osmId': landmark_row.get('osm_id'),
+        'tags': tags_value,
+        'wikidata': landmark_row.get('wikidata_id'),
+        'wikipedia': landmark_row.get('wikipedia_url'),
+    }
 
 @app.route('/api/health', methods=['GET'])
 def health():
@@ -288,10 +351,47 @@ def handle_answer_generation_request():
         landmark_metadata = request_data.get('landmark_metadata', {})
         historical_text = request_data.get('historical_text')
         user_question = request_data.get('question', '')
-        year_filter = request_data.get('year')
+        year_filter = normalize_optional_year(request_data.get('year'))
 
         if not landmark_name or not user_question:
             return jsonify({'status': 'error', 'error': 'Missing landmark_name or question'}), 400
+
+        context_length = len(historical_text or '') if historical_text else 0
+        is_limited = context_length < 150
+        
+        if is_limited:
+            landmark_type = landmark_metadata.get('type', 'place')
+            location_hint = landmark_metadata.get('address', landmark_metadata.get('name', 'this location'))
+            
+            fallback_prompt = f"""About: {landmark_name}
+Type: {landmark_type}
+Location: {location_hint}
+
+User's question: {user_question}
+
+I don't have detailed historical records for this specific {landmark_type}, but based on what I know about such places, here's what I can tell you:
+
+Provide a helpful 2-3 sentence response based on your knowledge of {landmark_type}s like this one. Be informative and practical."""
+            
+            generation_result = call_ollama_language_model(fallback_prompt, temperature=0.5)
+            landmark_database_id = f"lm-{landmark_name.lower().replace(' ', '-')}"
+            
+            if generation_result.get('status') == 'success':
+                db.save_generated_answer_for_landmark(
+                    landmark_database_id, 
+                    user_question, 
+                    generation_result.get('answer'), 
+                    year_filter, 
+                    'success'
+                )
+            
+            return jsonify({
+                'status': generation_result.get('status'),
+                'answer': generation_result.get('answer'),
+                'error': generation_result.get('error'),
+                'source': 'Ollama LLM (general knowledge)',
+                'note': 'Limited specific information available; providing general knowledge about this type of location'
+            })
 
         system_prompt = build_rag_system_prompt(
             landmark_name, 
@@ -325,7 +425,7 @@ def handle_answer_generation_request():
             'status': generation_result.get('status'),
             'answer': generation_result.get('answer'),
             'error': generation_result.get('error'),
-            'source': 'Ollama LLM',
+            'source': 'Ollama LLM (fact-based)',
         })
     except Exception as error:
         return jsonify({'status': 'error', 'error': str(error)}), 500
@@ -372,6 +472,106 @@ def retrieve_evaluation_results():
         return jsonify({'status': 'error', 'error': str(error)}), 500
 
 
+@app.route('/api/cache-landmarks', methods=['POST'])
+def cache_landmarks_for_region():
+    try:
+        request_data = request.get_json() or {}
+        landmarks = request_data.get('landmarks', [])
+        region_name = (request_data.get('region_name') or '').strip() or 'Cached Area'
+        center_lat = request_data.get('center_lat')
+        center_lon = request_data.get('center_lon')
+        radius_m = request_data.get('radius_m')
+
+        if not isinstance(landmarks, list) or not landmarks:
+            return jsonify({'status': 'error', 'error': 'Missing landmarks list'}), 400
+
+        saved_count = 0
+        for landmark in landmarks:
+            if not isinstance(landmark, dict):
+                continue
+
+            landmark_id = landmark.get('id')
+            landmark_name = landmark.get('name')
+            landmark_lat = landmark.get('lat')
+            landmark_lon = landmark.get('lon')
+            if not landmark_id or not landmark_name or landmark_lat is None or landmark_lon is None:
+                continue
+
+            save_ok = db.save_landmark_to_database({
+                'id': landmark_id,
+                'name': landmark_name,
+                'lat': float(landmark_lat),
+                'lon': float(landmark_lon),
+                'osmType': landmark.get('osmType'),
+                'osmId': landmark.get('osmId'),
+                'tags': landmark.get('tags', {}),
+                'wikidata': landmark.get('wikidata'),
+                'wikipedia': landmark.get('wikipedia'),
+            })
+            if save_ok:
+                saved_count += 1
+
+        if center_lat is not None and center_lon is not None and radius_m is not None and saved_count > 0:
+            db.save_cached_region(
+                name=region_name,
+                center_lat=center_lat,
+                center_lon=center_lon,
+                radius_m=radius_m,
+                landmark_count=saved_count,
+            )
+
+        return jsonify({
+            'status': 'success',
+            'saved_count': saved_count,
+            'requested_count': len(landmarks),
+        })
+    except Exception as error:
+        return jsonify({'status': 'error', 'error': str(error)}), 500
+
+
+@app.route('/api/cached-landmarks', methods=['GET'])
+def get_cached_landmarks_for_region():
+    try:
+        lat = request.args.get('lat', type=float)
+        lon = request.args.get('lon', type=float)
+        radius_km = request.args.get('radius_km', default=1.0, type=float)
+
+        if lat is None or lon is None:
+            return jsonify({'status': 'error', 'error': 'Missing lat/lon'}), 400
+
+        if radius_km <= 0:
+            radius_km = 1.0
+
+        cached_rows = db.retrieve_landmarks_by_geographic_area(lat, lon, radius_km)
+        landmarks = [normalize_landmark_for_frontend(row, lat, lon) for row in cached_rows]
+        landmarks.sort(key=lambda item: item.get('distance', 0))
+
+        return jsonify({
+            'status': 'success',
+            'landmarks': landmarks,
+            'count': len(landmarks),
+        })
+    except Exception as error:
+        return jsonify({'status': 'error', 'error': str(error)}), 500
+
+
+@app.route('/api/cached-regions', methods=['GET'])
+def get_cached_regions():
+    try:
+        limit = request.args.get('limit', default=100, type=int)
+        if limit <= 0:
+            limit = 100
+
+        regions = db.retrieve_cached_regions(limit=limit)
+        return jsonify({
+            'status': 'success',
+            'regions': regions,
+            'count': len(regions),
+        })
+    except Exception as error:
+        return jsonify({'status': 'error', 'error': str(error)}), 500
+
+
 @app.route('/api/fetch-wikipedia', methods=['POST'])
 def fetch_wiki_by_wikidata():
     try:
@@ -381,7 +581,6 @@ def fetch_wiki_by_wikidata():
         if not wikidata_id:
             return jsonify({'status': 'error', 'error': 'Missing wikidata_id'}), 400
         
-        # Try to get Wikipedia title from Wikidata
         wikidata_params = {
             'action': 'wbgetentities',
             'ids': wikidata_id,
@@ -401,7 +600,6 @@ def fetch_wiki_by_wikidata():
         
         entity = list(entities.values())[0]
         
-        # Try to get Wikipedia article title from sitelinks
         sitelinks = entity.get('sitelinks', {})
         wikipedia_site = sitelinks.get('enwiki', {})
         wikipedia_title = wikipedia_site.get('title')
@@ -409,8 +607,7 @@ def fetch_wiki_by_wikidata():
         if not wikipedia_title:
             return jsonify({'status': 'no_data', 'error': 'No Wikipedia article found'}), 200
         
-        # Fetch Wikipedia article
-        wiki_result = fetch_wikipedia_text(wikipedia_title, max_text_length=3000)
+        wiki_result = fetch_wikipedia_text(wikipedia_title)
         
         if wiki_result and wiki_result.get('status') == 'success':
             return jsonify({
@@ -437,24 +634,21 @@ def summarize_wikipedia_text():
         if not wikipedia_text:
             return jsonify({'status': 'error', 'error': 'Missing wikipedia_text'}), 400
         
-        # Create a prompt for Mistral to summarize
         summary_prompt = f"""Summarize the following text about {landmark_name} in exactly 2 sentences, keeping it under {max_words} words. Focus on historical significance and key facts. No introductions or explanations, just the summary:
 
 TEXT:
 {wikipedia_text[:1500]}
 
 SUMMARY:"""
-        
-        # Use Mistral 7B for summarization
         mistral_payload = {
-            'model': 'mistral',  # or 'mistral:7b' depending on your Ollama setup
+            'model': 'qwen3:4b',  # default (llama 2) or 'mistral:7b' depending on your Ollama setup
             'prompt': summary_prompt,
             'stream': False,
             'temperature': 0.3,
             'top_p': 0.9,
         }
         
-        llm_response = requests.post(OLLAMA_API, json=mistral_payload, timeout=60)
+        llm_response = requests.post(OLLAMA_API, json=mistral_payload, timeout=360)
         llm_response.raise_for_status()
         
         llm_data = llm_response.json()
@@ -465,7 +659,7 @@ SUMMARY:"""
         return jsonify({
             'status': 'success',
             'summary': summary_text,
-            'model': 'mistral',
+            'model': 'qwen3:4b',
             'word_count': len(summary_text.split())
         })
     except requests.exceptions.Timeout:
@@ -479,15 +673,13 @@ def ask_github_ai_unconstrained():
     try:
         request_data = request.get_json() or {}
         landmark_name = request_data.get('landmark_name', 'this location')
-        context_type = request_data.get('context_type', 'landmark')  # 'landmark' or 'question'
+        context_type = request_data.get('context_type', 'landmark')  
         user_question = request_data.get('question', '')
         landmark_metadata = request_data.get('metadata', {})
         
         if context_type == 'landmark':
-            # User is asking about the landmark in general
             prompt = f"""Tell me about the history and significance of {landmark_name}. What should visitors know about this place? Provide interesting historical facts, cultural significance, and notable events associated with it."""
         else:
-            # User is asking a specific question about a landmark
             metadata_text = ', '.join([f"{k}: {v}" for k, v in landmark_metadata.items()])
             prompt = f"""Question about {landmark_name} ({metadata_text}):
 
